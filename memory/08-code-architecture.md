@@ -404,7 +404,7 @@ python -m anime_game_afk.ui.app --debug  # with devtools
 ## Created
 
 - **Date**: 2026-04-05
-- **Updated**: 2026-04-05 — Wave 1 complete (112 tests). Wave 2 Tasks 1-3 (knowledge layer) complete. Wave 2 Tasks 4-8 (ops layer) complete. Total: **284/284** tests pass.
+- **Updated**: 2026-08-08 — Fork: Fanlesu/aether-gazer-afk. 12 files changed: intel badge exchange, red-dot detection (stamina/mail), OCR claims for daily/weekly/tactics, amusement training/PvP flow, shop coordinate fix, fantian combo script.
 
 ## E2E Performance Benchmarks (2026-04-06)
 

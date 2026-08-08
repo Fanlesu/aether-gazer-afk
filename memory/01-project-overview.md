@@ -30,3 +30,5 @@
 
 - 工作目录: `c:/Users/Administrator/Desktop/anime-game-afk/`
 - 参考项目: `.references/` 目录下（M9A, MAA, ok-ww, BetterGI）
+- Fork 自: `fxmoling/aether-gazer-afk` → `Fanlesu/aether-gazer-afk`
+- Remote: `origin` = 上游，`myfork` = 个人 fork
