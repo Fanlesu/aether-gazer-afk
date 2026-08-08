@@ -54,43 +54,55 @@ _SMART_RETURN = (
 )
 
 
-def _run_with_mocks(device=None):
+_RED_DOT_PATCH = "anime_game_afk.games.aether_gazer.tasks.mail_tasks.CollectAllMail._red_pixel_ratio"
+
+def _run_with_mocks(device=None, red_dot_ratio=None):
+    """Run CollectAllMail.execute() with mocked ReturnToHub + optional red dot.
+
+    If red_dot_ratio is None, the test was written before red-dot detection —
+    the check happens before the ReturnToHub mock would kick in, so
+    patches are ordered to deliver the intended result.
+    """
     device = device or MockDevice()
     ctx = TaskContext(device=device)
-    with patch(
-        _SMART_RETURN,
-        AsyncMock(return_value=OpResult(success=True, data={"attempts": 0})),
+    with (
+        patch(
+            _SMART_RETURN,
+            AsyncMock(return_value=OpResult(success=True, data={"attempts": 0})),
+        ),
+        patch(_RED_DOT_PATCH, return_value=red_dot_ratio if red_dot_ratio is not None else 0.15),
     ):
         result = _run(CollectAllMail().execute(ctx))
     return device, result
 
 
 def test_collect_all_mail_returns_success():
-    _, result = _run_with_mocks()
+    _, result = _run_with_mocks(red_dot_ratio=0.15)
     assert result.status == "success"
     assert result.data.get("action") == "mail_collected"
 
 
+def test_collect_all_mail_skips_without_red_dot():
+    """No red dot → task skips immediately."""
+    _, result = _run_with_mocks(red_dot_ratio=0.0)
+    assert result.status == "skipped"
+
+
 def test_collect_all_mail_presses_h_shortcut():
     """CollectAllMail uses H shortcut to open mail panel."""
-    device, _ = _run_with_mocks()
+    device, _ = _run_with_mocks(red_dot_ratio=0.15)
     assert VK_H in device.key_log
 
 
 def test_collect_all_mail_clicks_collect_all():
-    """CollectAllMail clicks the collect-all button at verified coordinates.
-
-    _COLLECT_ALL_X/Y are fractional; device receives pixels via
-    int(frac * design_resolution).
-    """
-    device, _ = _run_with_mocks()
-    # Coords are now fractional
+    """CollectAllMail clicks the collect-all button at verified coordinates."""
+    device, _ = _run_with_mocks(red_dot_ratio=0.15)
     assert (_COLLECT_ALL_X, _COLLECT_ALL_Y) in device.click_log
 
 
 def test_collect_all_mail_dismisses_with_enter():
     """CollectAllMail presses Enter to dismiss reward popup."""
-    device, _ = _run_with_mocks()
+    device, _ = _run_with_mocks(red_dot_ratio=0.15)
     assert VK_ENTER in device.key_log
 
 

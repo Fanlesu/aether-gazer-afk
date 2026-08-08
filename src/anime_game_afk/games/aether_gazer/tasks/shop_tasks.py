@@ -21,6 +21,7 @@ from anime_game_afk.games.aether_gazer.checks.ocr import (
 from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck, OnPageCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.perception.identify_page import is_on_page
+from anime_game_afk.vision.color import color_ratio
 from anime_game_afk.vision.ocr import ocr_full, ocr_once
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
@@ -116,8 +117,20 @@ class BuyIntelShards:
         purchased = await self._buy_loop(ctx, run_log)
         ctx.logger.info(f"[Step 2] Done: purchased {purchased} intel shards")
 
-        # ── Step 3: Return to hub ──
-        ctx.logger.info("[Step 3] Returning to hub")
+        # ── Step 3: Exchange intel badge ──
+        ctx.logger.info("[Step 3] Exchange intel badge")
+        try:
+            badge_result = await self._exchange_intel_badge(ctx, run_log)
+            ctx.logger.info(
+                f"[Step 3] Intel badge exchange: {badge_result}"
+            )
+        except Exception as exc:
+            ctx.logger.warning(
+                f"[Step 3] Intel badge exchange failed (non-fatal): {exc}"
+            )
+
+        # ── Step 4: Return to hub ──
+        ctx.logger.info("[Step 4] Returning to hub")
         await ReturnToHubAction().run(ctx)
         await SleepOp(seconds=1.0).run(ctx)
         if run_log:
@@ -157,9 +170,9 @@ class BuyIntelShards:
             run_log.snap(ctx.device, "buy_intel_at_hub")
 
         # Hub → shop (direct click with retry)
-        ctx.logger.info("  nav: hub -> shop (direct click 0.569, 0.944)")
+        ctx.logger.info("  nav: hub -> shop (direct click 0.588, 0.950)")
         for attempt in range(3):
-            await ClickOp(x=0.569, y=0.944, wait=2.0).run(ctx)
+            await ClickOp(x=0.588, y=0.950, wait=2.0).run(ctx)
             snap = await ScreenshotOp().run(ctx)
             img = snap.data
             if _is_shop_page(img):
@@ -397,6 +410,70 @@ class BuyIntelShards:
             ctx.logger.debug(f"  sold-out markers at x={positions}")
         return positions
 
+    # ------------------------------------------------------------------
+    # Intel badge exchange
+    # ------------------------------------------------------------------
+
+    async def _exchange_intel_badge(
+        self, ctx: TaskContext, run_log: RunLog | None,
+    ) -> str:
+        """Exchange intel badge (情报徽章) from 情报兑换 sub-page.
+
+        Navigates: 每日采购 → 交易中心 tab → 情报兑换 sub-tab
+        → OCR find 情报徽章兑换 button → click → 确定 confirm.
+
+        Returns 'exchanged', 'not_found', or 'no_badge_button'.
+        """
+        ctx.logger.info("  badge: navigating to 情报兑换 page")
+        # ── 交易中心 tab (left sidebar, 130,225 @ 1600x900) ──
+        await ClickOp(x=0.081, y=0.250, wait=0.5).run(ctx)
+        ctx.logger.info("  badge: clicked 交易中心 tab")
+        # ── 情报兑换 sub-tab (874,130 @ 1600x900) ──
+        await ClickOp(x=0.546, y=0.144, wait=0.5).run(ctx)
+        ctx.logger.info("  badge: clicked 情报兑换 sub-tab")
+        await SleepOp(seconds=1.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "badge_intel_exchange_page")
+
+        # ── OCR find 情报徽章兑换 button ──
+        badge_result = await FindTextCheck(target="情报徽章兑换").evaluate(ctx)
+        if not badge_result.passed:
+            ctx.logger.warning(
+                "  badge: '情报徽章兑换' button not found — "
+                "may already be exchanged or page layout changed"
+            )
+            return "not_found"
+
+        btn = badge_result.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  badge: clicking 情报徽章兑换 at ({cx},{cy})")
+        await ClickPxOp(px=cx, py=cy, wait=1.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "badge_popup")
+
+        # ── OCR find 确定 button ──
+        confirm_result = await FindTextCheck(target="确定").evaluate(ctx)
+        if not confirm_result.passed:
+            ctx.logger.warning(
+                "  badge: '确定' button not found in popup — trying Enter"
+            )
+            await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
+        else:
+            cbtn = confirm_result.data
+            cx = cbtn.region.x + cbtn.region.w // 2
+            cy = cbtn.region.y + cbtn.region.h // 2
+            ctx.logger.info(f"  badge: clicking 确定 at ({cx},{cy})")
+            await ClickPxOp(px=cx, py=cy, wait=1.0).run(ctx)
+
+        # ── Dismiss result popup ──
+        await PressKeyOp(key=VK_ENTER, wait=0.5).run(ctx)
+        ctx.logger.info("  badge: exchange completed")
+        if run_log:
+            run_log.snap(ctx.device, "badge_after_exchange")
+
+        return "exchanged"
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ClaimFreeStamina
@@ -551,9 +628,9 @@ class ClaimFreeStamina:
             run_log.snap(ctx.device, "stamina_at_hub")
 
         # Hub → shop (direct click with retry)
-        ctx.logger.info("  nav: hub -> shop (direct click 0.569, 0.944)")
+        ctx.logger.info("  nav: hub -> shop (direct click 0.588, 0.950)")
         for attempt in range(3):
-            await ClickOp(x=0.569, y=0.944, wait=2.0).run(ctx)
+            await ClickOp(x=0.588, y=0.950, wait=2.0).run(ctx)
             snap = await ScreenshotOp().run(ctx)
             img = snap.data
             if _is_shop_page(img):
@@ -650,6 +727,28 @@ class ClaimDailyStaminaPacks:
         run_log: RunLog | None = getattr(ctx, "run_log", None)
 
         ctx.logger.info("=== ClaimDailyStaminaPacks: starting ===")
+
+        # ── Step 0: Check red dot on stamina entry ──
+        ctx.logger.info("[Step 0] Check red dot on stamina at (0.522, 0.028)")
+        r = await ScreenshotOp().run(ctx)
+        red_ratio = color_ratio(
+            r.data,
+            hsv_low=(0, 120, 120), hsv_high=(10, 255, 255),
+            # 20x20 region around red dot position
+            region=Rect(
+                x=int(0.522 * r.data.shape[1]) - 10,
+                y=int(0.028 * r.data.shape[0]) - 10,
+                w=20, h=20,
+            ),
+        )
+        has_dot = red_ratio > 0.03
+        ctx.logger.info(f"[Step 0] Red dot: {has_dot} (ratio={red_ratio:.3f})")
+        if not has_dot:
+            ctx.logger.info("=== ClaimDailyStaminaPacks: skipped — no red dot ===")
+            return TaskResult(
+                status="skipped",
+                message="No red dot on stamina entry",
+            )
 
         # ── Step 1: Return to hub ──
         ctx.logger.info("[Step 1] Return to hub")

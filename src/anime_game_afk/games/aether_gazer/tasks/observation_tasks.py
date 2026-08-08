@@ -33,11 +33,7 @@ if TYPE_CHECKING:
 _MIMI_STATION_X, _MIMI_STATION_Y = 0.069, 0.911
 # 一键领取 button in 弥弥观测站 (1205,809 @ 1600x900, OCR verified center)
 _MIMI_CLAIM_X, _MIMI_CLAIM_Y = 0.753, 0.899
-# 每日任务 一键领取 button (1480,860 @ 1600x900, right-bottom of daily tasks page)
-_DAILY_CLAIM_X, _DAILY_CLAIM_Y = 0.925, 0.956
 # 周常任务 tab (estimated, left sidebar below 每日任务)
-# Note: (0.05, 0.217) was proven wrong — that's the 每日任务 tab itself.
-# Fallback coord only; prefer OCR to find the tab.
 _WEEKLY_TAB_X, _WEEKLY_TAB_Y = 0.05, 0.30
 
 
@@ -107,16 +103,17 @@ class MimiStationCollect:
 class DailyWeeklyMissionClaim:
     """Claim daily and weekly mission rewards.
 
-    Flow: hub → G(daily tasks) → 一键领取(1480,860) ×5 (daily)
-          → 周常任务(OCR) → 一键领取(1480,860) ×5 (weekly)
-          → return to hub
+    Flow:
+        hub → G(daily tasks)
+        → OCR "一键领取" → if found, click ×5 (daily)
+        → OCR "周常任务" tab → click
+        → click 返回 button
+        → OCR "一键领取" → if found, click ×5 (weekly primary)
+        → OCR "一键领取" → if found, click ×5 (weekly secondary)
+        → return to hub
 
-    Identification methods:
-    - Keyboard: G shortcut, ESC to close
-    - Fixed coord: 一键领取 button
-    - OCR: 周常任务 tab (fixed coord unreliable across resolutions)
-
-    Rapid clicks (×5) dismiss any popup that appears after claiming.
+    All claim clicks are OCR-driven — if "一键领取" is not found
+    the step is skipped.
     """
 
     name = "daily_weekly_mission_claim"
@@ -139,18 +136,24 @@ class DailyWeeklyMissionClaim:
         if run_log:
             run_log.snap(ctx.device, "mission_daily_tasks")
 
-        # Step 2: 一键领取 ×5 (daily)
-        ctx.logger.info(
-            f"[Step 2] Rapid click 一键领取 at "
-            f"({_DAILY_CLAIM_X},{_DAILY_CLAIM_Y}) ×5 (daily)"
-        )
-        await RapidClickAction(
-            x=_DAILY_CLAIM_X, y=_DAILY_CLAIM_Y, times=5, interval=0.5,
-        ).run(ctx)
+        # Step 2: OCR "一键领取" → if found, click ×5 (daily)
+        ctx.logger.info("[Step 2] Check for '一键领取' on daily page")
+        daily_claim = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if daily_claim.passed:
+            btn = daily_claim.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            ctx.logger.info(
+                f"  [Step 2] Found '一键领取' at ({cx},{cy}) — clicking ×5"
+            )
+            for _ in range(5):
+                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        else:
+            ctx.logger.info("  [Step 2] '一键领取' not found — skipped")
         if run_log:
             run_log.snap(ctx.device, "mission_after_daily")
 
-        # Step 3: Switch to 周常任务 — wait 0.5s after daily claim, then click twice
+        # Step 3: Switch to 周常任务 tab, then click 返回
         await SleepOp(seconds=0.5).run(ctx)
         ctx.logger.info("[Step 3] Find and click '周常任务' tab via OCR")
         weekly_result = await FindTextCheck(target="周常任务").evaluate(ctx)
@@ -167,35 +170,62 @@ class DailyWeeklyMissionClaim:
             )
             await ClickOp(x=_WEEKLY_TAB_X, y=_WEEKLY_TAB_Y, wait=0.2).run(ctx)
             await ClickOp(x=_WEEKLY_TAB_X, y=_WEEKLY_TAB_Y, wait=1.0).run(ctx)
+
+        # Click 返回 button after entering weekly tab
+        ctx.logger.info("  clicking 返回 button")
+        back_result = await FindTextCheck(target="返回").evaluate(ctx)
+        if back_result.passed:
+            btn = back_result.data
+            bx = btn.region.x + btn.region.w // 2
+            by = btn.region.y + btn.region.h // 2
+            await ClickPxOp(px=bx, py=by, wait=1.0).run(ctx)
+        else:
+            await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
         if run_log:
             run_log.snap(ctx.device, "mission_weekly")
 
-        # Step 4: 一键领取 ×5 (weekly)
-        ctx.logger.info(
-            f"[Step 4] Rapid click 一键领取 at "
-            f"({_DAILY_CLAIM_X},{_DAILY_CLAIM_Y}) ×5 (weekly)"
-        )
-        await RapidClickAction(
-            x=_DAILY_CLAIM_X, y=_DAILY_CLAIM_Y, times=5, interval=0.5,
-        ).run(ctx)
+        # Step 4: OCR "一键领取" → if found, click ×5 (weekly — primary)
+        ctx.logger.info("[Step 4] Check for '一键领取' on weekly page (primary)")
+        weekly_claim = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if weekly_claim.passed:
+            btn = weekly_claim.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            ctx.logger.info(
+                f"  [Step 4] Found '一键领取' at ({cx},{cy}) — clicking ×5"
+            )
+            for _ in range(5):
+                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        else:
+            ctx.logger.info("  [Step 4] '一键领取' not found — skipped")
         if run_log:
-            run_log.snap(ctx.device, "mission_after_weekly")
+            run_log.snap(ctx.device, "mission_after_weekly_primary")
 
-        # Step 5: Return to hub
-        ctx.logger.info("[Step 5] Return to hub")
-        await PressKeyOp(0x1B, wait=1.0).run(ctx)  # ESC
+        # Step 5: OCR "一键领取" → if found, click ×5 (weekly — secondary)
+        ctx.logger.info("[Step 5] Check for '一键领取' again (weekly secondary)")
+        secondary_claim = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if secondary_claim.passed:
+            btn = secondary_claim.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            ctx.logger.info(
+                f"  [Step 5] Found '一键领取' at ({cx},{cy}) — clicking ×5"
+            )
+            for _ in range(5):
+                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        else:
+            ctx.logger.info("  [Step 5] '一键领取' not found — skipped")
+        if run_log:
+            run_log.snap(ctx.device, "mission_after_weekly_secondary")
+
+        # Step 6: Return to hub
+        ctx.logger.info("[Step 6] Return to hub")
         await ReturnToHubAction().run(ctx)
         if run_log:
             run_log.snap(ctx.device, "mission_done")
 
         ctx.logger.info("=== DailyWeeklyMissionClaim: complete ===")
         return TaskResult(status="success", data={"task": "daily_weekly_claim"})
-
-
-# Verified coordinates (2026-04-06, 1600x900)
-# 对策协议 — tasks button and claim button
-_TACTICS_TASK_X, _TACTICS_TASK_Y = 0.101, 0.932     # 任务 button (162,839 @ 1600x900, OCR verified 2026-04-06)
-_TACTICS_CLAIM_X, _TACTICS_CLAIM_Y = 0.925, 0.956   # 一键领取 button (1480,860 @ 1600x900, right-bottom)
 
 
 class TacticsTaskClaim:
@@ -215,9 +245,10 @@ class TacticsTaskClaim:
     requires_ocr = True
     safe = True
 
+    _TACTICS_TASK_X, _TACTICS_TASK_Y = 0.101, 0.932
+    _TACTICS_CLAIM_X, _TACTICS_CLAIM_Y = 0.925, 0.956
+
     async def can_run(self, ctx: TaskContext) -> bool:
-        # OCR the hub for '对策协议' text — skip task if entry not visible
-        # (e.g. account hasn't unlocked the feature yet).
         ctx.logger.info("TacticsTaskClaim.can_run: OCR hub for '对策协议'…")
         result = await FindTextCheck(target="对策协议").evaluate(ctx)
         ctx.logger.info(
@@ -243,25 +274,58 @@ class TacticsTaskClaim:
 
         # Step 2: Click 任务 button (left-bottom)
         ctx.logger.info(
-            f"[Step 2] Click 任务 at ({_TACTICS_TASK_X},{_TACTICS_TASK_Y})"
+            f"[Step 2] Click 任务 at ({self._TACTICS_TASK_X},{self._TACTICS_TASK_Y})"
         )
-        await ClickOp(x=_TACTICS_TASK_X, y=_TACTICS_TASK_Y, wait=1.5).run(ctx)
+        await ClickOp(x=self._TACTICS_TASK_X, y=self._TACTICS_TASK_Y, wait=1.5).run(ctx)
         if run_log:
             run_log.snap(ctx.device, "tactics_tasks")
 
-        # Step 3: 一键领取 ×3
-        ctx.logger.info(
-            f"[Step 3] Rapid click 一键领取 at "
-            f"({_TACTICS_CLAIM_X},{_TACTICS_CLAIM_Y}) ×3"
-        )
-        await RapidClickAction(
-            x=_TACTICS_CLAIM_X, y=_TACTICS_CLAIM_Y, times=3, interval=0.5,
-        ).run(ctx)
+        # Step 3: OCR "一键领取" → if found, click ×3
+        ctx.logger.info("[Step 3] Check for '一键领取' on 对策协议 page")
+        claim_result = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if claim_result.passed:
+            btn = claim_result.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            ctx.logger.info(
+                f"  [Step 3] Found '一键领取' at ({cx},{cy}) — clicking ×3"
+            )
+            for _ in range(3):
+                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        else:
+            ctx.logger.info("  [Step 3] '一键领取' not found — skipped")
         if run_log:
             run_log.snap(ctx.device, "tactics_after_claim")
 
-        # Step 4: Return to hub
-        ctx.logger.info("[Step 4] Return to hub")
+        # Step 4: Click 返回, then OCR "一键领取" again
+        ctx.logger.info("[Step 4] Click 返回 → check for '一键领取' again")
+        back_result = await FindTextCheck(target="返回").evaluate(ctx)
+        if back_result.passed:
+            btn = back_result.data
+            bx = btn.region.x + btn.region.w // 2
+            by = btn.region.y + btn.region.h // 2
+            await ClickPxOp(px=bx, py=by, wait=1.0).run(ctx)
+        else:
+            await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
+
+        ctx.logger.info("  checking for secondary '一键领取'")
+        claim2 = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if claim2.passed:
+            btn = claim2.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            ctx.logger.info(
+                f"  [Step 4] Found secondary '一键领取' at ({cx},{cy}) — clicking ×3"
+            )
+            for _ in range(3):
+                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        else:
+            ctx.logger.info("  [Step 4] Secondary '一键领取' not found — skipped")
+        if run_log:
+            run_log.snap(ctx.device, "tactics_after_secondary_claim")
+
+        # Step 5: Return to hub
+        ctx.logger.info("[Step 5] Return to hub")
         await ReturnToHubAction().run(ctx)
         if run_log:
             run_log.snap(ctx.device, "tactics_done")

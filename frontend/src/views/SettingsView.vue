@@ -129,7 +129,9 @@
         </span>
       </div>
       <div class="qr-row">
+        <!--
         <img :src="qqGroupQr" class="qr-img" alt="QQ群二维码">
+        -->
       </div>
     </div>
 
@@ -147,12 +149,12 @@
 import { ref, reactive, onMounted } from 'vue'
 import { api } from '../composables/useApi'
 import { useTheme } from '../themes/useTheme'
-import qqGroupQrSrc from '../assets/group_qr.jpg'
+//import qqGroupQrSrc from '../assets/group_qr.jpg'
 
 const { currentTheme, setTheme, themeList } = useTheme()
 
 const qqGroupUrl = 'https://qm.qq.com/q/W9LZqg9NG'
-const qqGroupQr = qqGroupQrSrc
+const qqGroupQr = '' // qqGroupQrSrc （图片缺失，临时占位）
 
 const settings = reactive({
   version: '',

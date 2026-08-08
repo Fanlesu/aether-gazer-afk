@@ -101,7 +101,7 @@ class SkipStartupPopups:
                 # ── Rapid click blank area to dismiss popups ──
                 ctx.logger.debug(f"  [startup] attempt {attempt}: rapid-clicking to dismiss popups")
                 await RapidClickAction(
-                    x=0.4, y=0.05, times=5, interval=0.15,
+                    x=0.157, y=0.590, times=5, interval=0.15,
                 ).run(ctx)
 
             # Max attempts exceeded — final check

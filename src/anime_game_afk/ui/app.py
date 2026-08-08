@@ -162,7 +162,6 @@ def main() -> None:
             _shutdown_done[0] = True
             return True
     def _run_shutdown(reason: str) -> None:
-    def _run_shutdown(reason: str) -> None:
         _log.info("Shutdown triggered by: {}", reason)
         try:
             task_manager.shutdown()

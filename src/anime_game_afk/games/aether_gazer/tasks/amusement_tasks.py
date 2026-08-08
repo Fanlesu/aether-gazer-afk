@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
+from anime_game_afk.core.types import Rect
+from anime_game_afk.games.aether_gazer.checks.ocr import FindAllTextCheck, FindTextCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
@@ -177,10 +178,25 @@ class AmusementStreetDaily:
         if run_log:
             run_log.snap(ctx.device, "amusement_after_dispatch")
 
-        # Step 7: ESC back to street page, then claim 游园任务 rewards
+        # Step 7: Training (前往训练) → select character → level 20
+        # Then: 玩家对战 → 玩家挑战 → 稍胜一筹 → challenge
+        ctx.logger.info("[Step 7] Training + PvP challenge")
+        try:
+            await self._do_training_and_pvp(ctx, run_log)
+        except Exception as exc:
+            ctx.logger.warning(
+                f"[Step 7] Training/PvP failed (non-fatal): {exc}"
+            )
+            # Attempt recovery: ESC back to panel overview
+            try:
+                await PressKeyOp(key=VK_ESCAPE, wait=0.5).run(ctx)
+            except Exception:
+                pass
+
+        # Step 8: ESC back to street page, then claim 游园任务 rewards
         # 游园任务 button is on the STREET page (bottom bar), NOT the panel.
         # Verified from 04_amusement_street.png vs 05_amusement_panel.png.
-        ctx.logger.info("[Step 7] ESC to street → click 游园任务 → claim rewards")
+        ctx.logger.info("[Step 8] ESC to street → click 游园任务 → claim rewards")
         await PressKeyOp(key=VK_ESCAPE, wait=1.5).run(ctx)
 
         # Fixed coord: 游园任务 button on street bottom bar (0.621, 0.944)
@@ -207,8 +223,8 @@ class AmusementStreetDaily:
         if run_log:
             run_log.snap(ctx.device, "amusement_after_park_tasks")
 
-        # Step 8: ESC + return to hub (only 1 ESC needed — already on street)
-        ctx.logger.info("[Step 8] ESC + return to hub")
+        # Step 9: ESC + return to hub (only 1 ESC needed — already on street)
+        ctx.logger.info("[Step 9] ESC + return to hub")
         await PressKeyOp(key=VK_ESCAPE, wait=1.0).run(ctx)
         await ReturnToHubAction().run(ctx)
         if run_log:
@@ -219,3 +235,180 @@ class AmusementStreetDaily:
             status="success",
             data={"task": "amusement_street"},
         )
+
+    # ------------------------------------------------------------------
+    # Training + PvP sub-flow
+    # ------------------------------------------------------------------
+
+    async def _do_training_and_pvp(
+        self, ctx: TaskContext, run_log: RunLog | None,
+    ) -> None:
+        """Training (前往训练) + 玩家对战 flow from the 游园街 panel page.
+
+        Flow:
+        1. OCR "前往训练" → click
+        2. OCR "修正者" → click
+        3. Click (0.075, 0.325) — character slot
+        4. OCR "20" → double-click slightly above (offset -0.001)
+        5. Click 左上角返回 (0.022, 0.039) → back to training page
+        6. OCR "玩家对战" → click
+        7. OCR "玩家挑战" → click
+        8. OCR "稍胜一筹" → click "挑战" to its right
+        9. Click 左上角返回 (0.022, 0.039) → back
+        10. OCR "返回" → click → back again
+        11. Click 左上角返回 (0.022, 0.039) → back to panel page
+        """
+        # ── 1. OCR 前往训练 ──
+        ctx.logger.info("  train: looking for '前往训练'")
+        train_result = await FindTextCheck(target="前往训练").evaluate(ctx)
+        if not train_result.passed:
+            # May be on a sub-panel from dispatch loop — ESC once to return
+            # to panel overview, then retry
+            ctx.logger.info("  train: '前往训练' not found, trying ESC + retry")
+            await PressKeyOp(key=VK_ESCAPE, wait=0.5).run(ctx)
+            await SleepOp(seconds=1.5).run(ctx)
+            if run_log:
+                run_log.snap(ctx.device, "amusement_before_training_retry")
+            train_result = await FindTextCheck(target="前往训练").evaluate(ctx)
+            if not train_result.passed:
+                ctx.logger.warning("  train: '前往训练' still not found after ESC")
+                return
+        btn = train_result.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  train: clicking '前往训练' at ({cx},{cy})")
+        await ClickPxOp(px=cx, py=cy, wait=2.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "amusement_training_page")
+
+        # ── 2. OCR 修正者 ──
+        ctx.logger.info("  train: looking for '修正者'")
+        char_result = await FindTextCheck(target="修正者").evaluate(ctx)
+        if not char_result.passed:
+            ctx.logger.warning("  train: '修正者' not found")
+            await self._click_back_button(ctx)
+            return
+        btn = char_result.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  train: clicking '修正者' at ({cx},{cy})")
+        await ClickPxOp(px=cx, py=cy, wait=1.5).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "amusement_training_char_page")
+
+        # ── 3. Click character slot ──
+        ctx.logger.info("  train: clicking character slot (0.075, 0.325)")
+        await ClickOp(x=0.075, y=0.325, wait=1.5).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "amusement_training_char_list")
+
+        # ── 4. OCR "20" → double-click above text (card avatar area) ──
+        ctx.logger.info("  train: looking for level '20'")
+        lv20_result = await FindTextCheck(target="20").evaluate(ctx)
+        if lv20_result.passed:
+            btn = lv20_result.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            # "20" is at the card bottom; click ~49px above to hit the avatar
+            click_y = cy - 49
+            ctx.logger.info(
+                f"  train: '20' found at ({cx},{cy}), double-clicking ({cx},{click_y})"
+            )
+            await ClickPxOp(px=cx, py=click_y, wait=0.3).run(ctx)
+            await ClickPxOp(px=cx, py=click_y, wait=1.0).run(ctx)
+            if run_log:
+                run_log.snap(ctx.device, "amusement_training_lv20_selected")
+        else:
+            ctx.logger.info("  train: '20' not found, skipping level select")
+
+        # ── 5. Click 左上角返回 ──
+        await self._click_back_button(ctx)
+
+        # ── 6. OCR 玩家对战 ──
+        ctx.logger.info("  pvp: looking for '玩家对战'")
+        pvp_result = await FindTextCheck(target="玩家对战").evaluate(ctx)
+        if not pvp_result.passed:
+            ctx.logger.warning("  pvp: '玩家对战' not found")
+            # Still try to return
+            await self._click_back_button(ctx)
+            return
+        btn = pvp_result.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  pvp: clicking '玩家对战' at ({cx},{cy})")
+        await ClickPxOp(px=cx, py=cy, wait=2.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "amusement_pvp_page")
+
+        # ── 7. OCR 玩家挑战 ──
+        ctx.logger.info("  pvp: looking for '玩家挑战'")
+        challenge_result = await FindTextCheck(target="玩家挑战").evaluate(ctx)
+        if not challenge_result.passed:
+            ctx.logger.warning("  pvp: '玩家挑战' not found")
+            await self._click_back_button(ctx)
+            # Also click "返回" if present
+            back_result = await FindTextCheck(target="返回").evaluate(ctx)
+            if back_result.passed:
+                btn = back_result.data
+                await ClickPxOp(
+                    px=btn.region.x + btn.region.w // 2,
+                    py=btn.region.y + btn.region.h // 2,
+                    wait=1.0,
+                ).run(ctx)
+            await self._click_back_button(ctx)
+            return
+        btn = challenge_result.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  pvp: clicking '玩家挑战' at ({cx},{cy})")
+        await ClickPxOp(px=cx, py=cy, wait=2.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "amusement_pvp_challenge_list")
+
+        # ── 8. OCR "稍胜一筹" → click "挑战" to its right ──
+        ctx.logger.info("  pvp: looking for '稍胜一筹'")
+        sheng_result = await FindTextCheck(target="稍胜一筹").evaluate(ctx)
+        if sheng_result.passed:
+            btn = sheng_result.data
+            # "挑战" button is to the right of "稍胜一筹"
+            # Estimate: right edge of text + offset
+            challenge_x = btn.region.x + btn.region.w + 50
+            challenge_y = btn.region.y + btn.region.h // 2
+            ctx.logger.info(
+                f"  pvp: '稍胜一筹' found at x={btn.region.x}, "
+                f"clicking '挑战' at estimated ({challenge_x},{challenge_y})"
+            )
+            await ClickPxOp(px=challenge_x, py=challenge_y, wait=3.0).run(ctx)
+            if run_log:
+                run_log.snap(ctx.device, "amusement_pvp_after_challenge")
+
+            # Dismiss any result popup
+            await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
+        else:
+            ctx.logger.info("  pvp: '稍胜一筹' not found")
+
+        # ── 9. Click 左上角返回 ──
+        await self._click_back_button(ctx)
+
+        # ── 10. OCR "返回" → click ──
+        ctx.logger.info("  pvp: looking for '返回'")
+        back_result = await FindTextCheck(target="返回").evaluate(ctx)
+        if back_result.passed:
+            btn = back_result.data
+            cx = btn.region.x + btn.region.w // 2
+            cy = btn.region.y + btn.region.h // 2
+            ctx.logger.info(f"  pvp: clicking '返回' at ({cx},{cy})")
+            await ClickPxOp(px=cx, py=cy, wait=1.5).run(ctx)
+
+        # ── 11. Click 左上角返回 ──
+        await self._click_back_button(ctx)
+        ctx.logger.info("  train/pvp: flow complete, back on panel page")
+
+    # ------------------------------------------------------------------
+    # Helper: click the top-left back button
+    # ------------------------------------------------------------------
+
+    async def _click_back_button(self, ctx: TaskContext) -> None:
+        """Click the top-left back arrow button."""
+        ctx.logger.debug("  clicking back button (0.022, 0.039)")
+        await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
