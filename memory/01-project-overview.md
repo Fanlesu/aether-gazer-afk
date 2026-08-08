@@ -32,3 +32,4 @@
 - 参考项目: `.references/` 目录下（M9A, MAA, ok-ww, BetterGI）
 - Fork 自: `fxmoling/aether-gazer-afk` → `Fanlesu/aether-gazer-afk`
 - Remote: `origin` = 上游，`myfork` = 个人 fork
+- Latest release: **v0.3.0** — https://github.com/Fanlesu/aether-gazer-afk/releases/tag/v0.3.0
