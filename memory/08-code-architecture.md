@@ -404,7 +404,7 @@ python -m anime_game_afk.ui.app --debug  # with devtools
 ## Created
 
 - **Date**: 2026-04-05
-- **Updated**: 2026-08-08 — v0.3.0 released on Fanlesu/aether-gazer-afk. 12 files changed: intel badge exchange, red-dot detection (stamina/mail), OCR claims for daily/weekly/tactics, amusement training/PvP flow, shop coordinate fix, fantian combo script.
+- **Updated**: 2026-08-08 — v0.3.0 released on GitHub Fanlesu/aether-gazer-afk. 12 files changed: intel badge exchange, red-dot detection (stamina/mail), OCR claims for daily/weekly/tactics, amusement training/PvP flow, shop coordinate fix, fantian combo script.
 
 ## E2E Performance Benchmarks (2026-04-06)
 
