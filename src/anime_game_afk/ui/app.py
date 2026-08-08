@@ -248,6 +248,13 @@ def main() -> None:
     _start_shutdown_thread("post-webview.start")
     task_manager.disconnect()
 
+    # 8. Force-exit to prevent lingering tray icon / background process.
+    #    pywebview on some systems keeps WebView2 alive after window close,
+    #    leaving the process visible in the system tray indefinitely.
+    _do_shutdown("forced-exit")
+    import os as _os
+    _os._exit(0)
+
 
 if __name__ == "__main__":
     main()
