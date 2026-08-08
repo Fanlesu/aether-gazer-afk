@@ -29,8 +29,21 @@ SPEC_FILE = PROJECT_ROOT / f"{APP_NAME}.spec"
 # up under Lib/).
 import sysconfig
 SITE_PACKAGES = Path(sysconfig.get_paths()["purelib"])
-MAA_PKG = SITE_PACKAGES / "maa"
-MAA_AGENT_BINARY = SITE_PACKAGES / "MaaAgentBinary"
+
+# maa may be installed in the per-user roaming site-packages rather than
+# the system-wide one (especially when pip install --user was used or
+# when running under a non-admin Python).  Check the roaming location
+# first, fall back to the system purelib path.
+import site
+_ROAMING = Path(site.getusersitepackages())  # type: ignore[attr-defined]
+_maa_candidates = [_ROAMING / "maa"] if _ROAMING.exists() else []
+_maa_candidates.append(SITE_PACKAGES / "maa")
+MAA_PKG = None
+for _candidate in _maa_candidates:
+    if _candidate.exists():
+        MAA_PKG = _candidate
+        break
+MAA_AGENT_BINARY = MAA_PKG.parent / "MaaAgentBinary" if MAA_PKG else None
 
 if not MAA_PKG.exists():
     raise SystemExit(
@@ -472,13 +485,17 @@ def build(skip_spec: bool = False) -> None:
 
         # Copy MaaFw DLLs manually (bypassing PyInstaller's binary handling entirely)
         # This avoids bootloader preload failures and reclassification issues.
-        maa_bin_src = SITE_PACKAGES / "maa" / "bin"
+        # MAA_PKG already points to the real maa package directory (roaming or
+        # system), so maa/bin/ is directly under it.
+        maa_bin_src = MAA_PKG / "bin"
         maa_bin_dst = internal / "maa" / "bin"
         if maa_bin_src.exists():
             if maa_bin_dst.exists():
                 shutil.rmtree(maa_bin_dst)
             shutil.copytree(str(maa_bin_src), str(maa_bin_dst))
             print(f"Copied MaaFw DLLs -> {maa_bin_dst}")
+        else:
+            print(f"WARNING: maa/bin not found at {maa_bin_src} — EXE will crash!")
 
         # Remove opencv ffmpeg DLL (~28MB, not needed for screenshots)
         for ffmpeg in internal.rglob("opencv_videoio_ffmpeg*.dll"):
