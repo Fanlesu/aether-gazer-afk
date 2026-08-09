@@ -741,7 +741,7 @@ class ClaimDailyStaminaPacks:
                 w=20, h=20,
             ),
         )
-        has_dot = red_ratio > 0.03
+        has_dot = red_ratio > 0.02
         ctx.logger.info(f"[Step 0] Red dot: {has_dot} (ratio={red_ratio:.3f})")
         if not has_dot:
             ctx.logger.info("=== ClaimDailyStaminaPacks: skipped — no red dot ===")

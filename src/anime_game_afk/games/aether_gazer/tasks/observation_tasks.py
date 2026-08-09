@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from anime_game_afk.core.types import Rect
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_G, VK_T
 from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import (
@@ -20,6 +21,7 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
     ClickPxOp,
     PressKeyOp,
+    ScreenshotOp,
     SleepOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
@@ -28,6 +30,12 @@ if TYPE_CHECKING:
     from anime_game_afk.runtime.run_log import RunLog
 
 
+# HSV low-red range for red dot detection
+_RED_LOW = (0, 120, 120)
+_RED_HIGH = (10, 255, 255)
+_RED_DOT_RATIO = 0.02
+_RED_REGION_SIZE = 20
+
 # Verified coordinates (2026-04-06, 1600x900 design resolution)
 # 弥弥观测站 button in daily tasks page (110,820 @ 1600x900)
 _MIMI_STATION_X, _MIMI_STATION_Y = 0.069, 0.911
@@ -35,6 +43,10 @@ _MIMI_STATION_X, _MIMI_STATION_Y = 0.069, 0.911
 _MIMI_CLAIM_X, _MIMI_CLAIM_Y = 0.753, 0.899
 # 周常任务 tab (estimated, left sidebar below 每日任务)
 _WEEKLY_TAB_X, _WEEKLY_TAB_Y = 0.05, 0.30
+
+# Red dot positions on daily tasks page (verified via coord-picker)
+_DAILY_TAB_RED_DOT = (0.828, 0.095)    # 日常任务 tab red dot
+_WEEKLY_TAB_RED_DOT = (0.052, 0.153)   # 周常任务 tab red dot
 
 
 class MimiStationCollect:
@@ -104,16 +116,16 @@ class DailyWeeklyMissionClaim:
     """Claim daily and weekly mission rewards.
 
     Flow:
-        hub → G(daily tasks)
-        → OCR "一键领取" → if found, click ×5 (daily)
-        → OCR "周常任务" tab → click
-        → click 返回 button
-        → OCR "一键领取" → if found, click ×5 (weekly primary)
-        → OCR "一键领取" → if found, click ×5 (weekly secondary)
+        hub → G(daily tasks) → screenshot
+        → red dot check: daily (0.828,0.095), weekly (0.052,0.153)
+        → skip if neither has red dot
+        → OCR "一键领取" on daily page → click ×5 (if daily dot)
+        → click 周常任务 tab (red dot coord) → click 返回
+        → OCR "一键领取" on weekly page → click ×5 ×2 (if weekly dot)
         → return to hub
 
     All claim clicks are OCR-driven — if "一键领取" is not found
-    the step is skipped.
+    the step is skipped. Red dot detection gates the whole task.
     """
 
     name = "daily_weekly_mission_claim"
@@ -122,6 +134,9 @@ class DailyWeeklyMissionClaim:
     requires_pages = ("main_hub", "daily_tasks")
     requires_ocr = True
     safe = True
+
+    _DAILY_DOT = _DAILY_TAB_RED_DOT   # (0.828, 0.095)
+    _WEEKLY_DOT = _WEEKLY_TAB_RED_DOT  # (0.052, 0.153)
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
@@ -133,46 +148,106 @@ class DailyWeeklyMissionClaim:
         # Step 1: G → daily tasks
         ctx.logger.info("[Step 1] Press G → daily tasks")
         await PressKeyOp(VK_G, wait=1.5).run(ctx)
+
+        # Step 2: Screenshot + red dot check on both tabs
+        ctx.logger.info("[Step 2] Red dot check on daily/weekly tabs")
+        screenshot = await ScreenshotOp().run(ctx)
+        _h, _w = screenshot.data.shape[:2]
         if run_log:
             run_log.snap(ctx.device, "mission_daily_tasks")
 
-        # Step 2: OCR "一键领取" → if found, click ×5 (daily)
-        ctx.logger.info("[Step 2] Check for '一键领取' on daily page")
-        daily_claim = await FindTextCheck(target="一键领取").evaluate(ctx)
-        if daily_claim.passed:
-            btn = daily_claim.data
+        daily_dot = self._check_red_dot(screenshot.data, *_DAILY_TAB_RED_DOT, _w, _h)
+        weekly_dot = self._check_red_dot(screenshot.data, *_WEEKLY_TAB_RED_DOT, _w, _h)
+        ctx.logger.info(
+            f"[Step 2] Red dots — daily={daily_dot}, weekly={weekly_dot}"
+        )
+
+        if not daily_dot and not weekly_dot:
+            ctx.logger.info("[Step 2] Neither tab has red dot — skipping")
+            await ReturnToHubAction().run(ctx)
+            return TaskResult(
+                status="skipped",
+                message="No red dot on daily or weekly mission tabs",
+            )
+
+        claimed = 0
+
+        # Step 3: Claim daily (if red dot)
+        if daily_dot:
+            claimed += await self._claim_section(
+                ctx, "daily", 5,
+            )
+
+        # Step 4: Switch to 周常任务 tab (if weekly red dot, but also try
+        # even if daily was the only dot — user has no weekly dot but
+        # might have a pending secondary weekly claim)
+        if weekly_dot:
+            ctx.logger.info("[Step 4] Switch to 周常任务 tab")
+            await self._switch_to_weekly(ctx)
+            if run_log:
+                run_log.snap(ctx.device, "mission_weekly")
+
+            claimed += await self._claim_section(
+                ctx, "weekly-primary", 5,
+            )
+            claimed += await self._claim_section(
+                ctx, "weekly-secondary", 5,
+            )
+
+        # Step 5: Return to hub
+        ctx.logger.info("[Step 5] Return to hub")
+        await ReturnToHubAction().run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "mission_done")
+
+        ctx.logger.info(
+            f"=== DailyWeeklyMissionClaim: complete (claimed={claimed}) ==="
+        )
+        return TaskResult(
+            status="success",
+            data={"task": "daily_weekly_claim", "claimed": claimed},
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _claim_section(
+        self, ctx: TaskContext, label: str, times: int,
+    ) -> int:
+        """OCR '一键领取' and click ×N. Returns 1 if claimed, 0 otherwise."""
+        ctx.logger.info(f"  [{label}] Checking '一键领取'...")
+        result = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if result.passed:
+            btn = result.data
             cx = btn.region.x + btn.region.w // 2
             cy = btn.region.y + btn.region.h // 2
             ctx.logger.info(
-                f"  [Step 2] Found '一键领取' at ({cx},{cy}) — clicking ×5"
+                f"  [{label}] Found '一键领取' at ({cx},{cy}) — clicking ×{times}"
             )
-            for _ in range(5):
+            for _ in range(times):
                 await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
-        else:
-            ctx.logger.info("  [Step 2] '一键领取' not found — skipped")
-        if run_log:
-            run_log.snap(ctx.device, "mission_after_daily")
+            return 1
+        ctx.logger.info(f"  [{label}] '一键领取' not found — skipped")
+        return 0
 
-        # Step 3: Switch to 周常任务 tab, then click 返回
+    async def _switch_to_weekly(self, ctx: TaskContext) -> None:
+        """Switch to 周常任务 tab via OCR, fallback to fixed coord."""
         await SleepOp(seconds=0.5).run(ctx)
-        ctx.logger.info("[Step 3] Find and click '周常任务' tab via OCR")
-        weekly_result = await FindTextCheck(target="周常任务").evaluate(ctx)
-        if weekly_result.passed:
-            weekly = weekly_result.data
-            wx = weekly.region.x + weekly.region.w // 2
-            wy = weekly.region.y + weekly.region.h // 2
+        result = await FindTextCheck(target="周常任务").evaluate(ctx)
+        if result.passed:
+            tab = result.data
+            wx = tab.region.x + tab.region.w // 2
+            wy = tab.region.y + tab.region.h // 2
             ctx.logger.info(f"  Found '周常任务' at ({wx},{wy})")
             await ClickPxOp(px=wx, py=wy, wait=0.2).run(ctx)
             await ClickPxOp(px=wx, py=wy, wait=1.0).run(ctx)
         else:
-            ctx.logger.warning(
-                "  '周常任务' not found via OCR, using fallback coord"
-            )
+            ctx.logger.warning("  '周常任务' OCR failed, using fallback coord")
             await ClickOp(x=_WEEKLY_TAB_X, y=_WEEKLY_TAB_Y, wait=0.2).run(ctx)
             await ClickOp(x=_WEEKLY_TAB_X, y=_WEEKLY_TAB_Y, wait=1.0).run(ctx)
 
-        # Click 返回 button after entering weekly tab
-        ctx.logger.info("  clicking 返回 button")
+        # Click 返回 button
         back_result = await FindTextCheck(target="返回").evaluate(ctx)
         if back_result.passed:
             btn = back_result.data
@@ -181,51 +256,35 @@ class DailyWeeklyMissionClaim:
             await ClickPxOp(px=bx, py=by, wait=1.0).run(ctx)
         else:
             await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
-        if run_log:
-            run_log.snap(ctx.device, "mission_weekly")
 
-        # Step 4: OCR "一键领取" → if found, click ×5 (weekly — primary)
-        ctx.logger.info("[Step 4] Check for '一键领取' on weekly page (primary)")
-        weekly_claim = await FindTextCheck(target="一键领取").evaluate(ctx)
-        if weekly_claim.passed:
-            btn = weekly_claim.data
-            cx = btn.region.x + btn.region.w // 2
-            cy = btn.region.y + btn.region.h // 2
-            ctx.logger.info(
-                f"  [Step 4] Found '一键领取' at ({cx},{cy}) — clicking ×5"
-            )
-            for _ in range(5):
-                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
-        else:
-            ctx.logger.info("  [Step 4] '一键领取' not found — skipped")
-        if run_log:
-            run_log.snap(ctx.device, "mission_after_weekly_primary")
+    @staticmethod
+    def _check_red_dot(img, fx: float, fy: float, w: int, h: int) -> bool:
+        """Check for red dot at normalized coords (fx, fy) in a BGR image."""
+        import cv2
+        import numpy as np
 
-        # Step 5: OCR "一键领取" → if found, click ×5 (weekly — secondary)
-        ctx.logger.info("[Step 5] Check for '一键领取' again (weekly secondary)")
-        secondary_claim = await FindTextCheck(target="一键领取").evaluate(ctx)
-        if secondary_claim.passed:
-            btn = secondary_claim.data
-            cx = btn.region.x + btn.region.w // 2
-            cy = btn.region.y + btn.region.h // 2
-            ctx.logger.info(
-                f"  [Step 5] Found '一键领取' at ({cx},{cy}) — clicking ×5"
-            )
-            for _ in range(5):
-                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
-        else:
-            ctx.logger.info("  [Step 5] '一键领取' not found — skipped")
-        if run_log:
-            run_log.snap(ctx.device, "mission_after_weekly_secondary")
+        cx = int(fx * w)
+        cy = int(fy * h)
+        hs = _RED_REGION_SIZE // 2
+        crop = img[cy - hs:cy + hs, cx - hs:cx + hs]
 
-        # Step 6: Return to hub
-        ctx.logger.info("[Step 6] Return to hub")
-        await ReturnToHubAction().run(ctx)
-        if run_log:
-            run_log.snap(ctx.device, "mission_done")
-
-        ctx.logger.info("=== DailyWeeklyMissionClaim: complete ===")
-        return TaskResult(status="success", data={"task": "daily_weekly_claim"})
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask_low = cv2.inRange(
+            hsv,
+            np.array(_RED_LOW, dtype=np.uint8),
+            np.array(_RED_HIGH, dtype=np.uint8),
+        )
+        mask_high = cv2.inRange(
+            hsv,
+            np.array((170, 120, 120), dtype=np.uint8),
+            np.array((180, 255, 255), dtype=np.uint8),
+        )
+        mask = mask_low | mask_high
+        total = mask.size
+        if total == 0:
+            return False
+        ratio = float(np.count_nonzero(mask)) / total
+        return ratio > _RED_DOT_RATIO
 
 
 class TacticsTaskClaim:

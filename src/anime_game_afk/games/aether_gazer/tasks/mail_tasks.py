@@ -22,7 +22,7 @@ _COLLECT_ALL_X, _COLLECT_ALL_Y = 0.182, 0.832   # 全部领取 button
 # Red dot: HSV low-red range
 _RED_LOW = (0, 120, 120)
 _RED_HIGH = (10, 255, 255)
-_RED_DOT_RATIO = 0.03
+_RED_DOT_RATIO = 0.02
 _RED_REGION_SIZE = 20
 
 

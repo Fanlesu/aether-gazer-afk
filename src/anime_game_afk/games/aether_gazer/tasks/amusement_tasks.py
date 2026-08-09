@@ -292,7 +292,7 @@ class AmusementStreetDaily:
         cx = btn.region.x + btn.region.w // 2
         cy = btn.region.y + btn.region.h // 2
         ctx.logger.info(f"  train: clicking '修正者' at ({cx},{cy})")
-        await ClickPxOp(px=cx, py=cy, wait=1.5).run(ctx)
+        await ClickPxOp(px=cx, py=cy, wait=2).run(ctx)
         if run_log:
             run_log.snap(ctx.device, "amusement_training_char_page")
 

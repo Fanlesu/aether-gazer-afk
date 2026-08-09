@@ -242,18 +242,31 @@ def main() -> None:
 
     webview.start(debug="--debug" in sys.argv)
 
-    # 7. Cleanup (idempotent if already triggered by window 'closing' event)
-    # Keep this non-blocking too; after the window is gone, process exit
-    # should not depend on MaaFw/post_inactive or worker joins completing.
-    _start_shutdown_thread("post-webview.start")
+    # 7. Cleanup after window closes
+    _do_shutdown("post-webview.start")
     task_manager.disconnect()
 
-    # 8. Force-exit to prevent lingering tray icon / background process.
-    #    pywebview on some systems keeps WebView2 alive after window close,
-    #    leaving the process visible in the system tray indefinitely.
-    _do_shutdown("forced-exit")
+    # 8. Force-exit — kill stray WebView2 processes, then hard exit.
+    #    pywebview can leave msedgewebview2.exe alive (visible as tray icon).
+    _kill_webview2_processes()
     import os as _os
     _os._exit(0)
+
+
+def _kill_webview2_processes() -> None:
+    """Terminate any leftover msedgewebview2.exe processes."""
+    import subprocess
+    import sys as _sys
+    if _sys.platform != "win32":
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "msedgewebview2.exe"],
+            capture_output=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
