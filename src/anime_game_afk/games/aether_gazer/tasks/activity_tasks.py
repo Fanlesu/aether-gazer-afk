@@ -187,7 +187,15 @@ class JointDefenseSweep:
 
         # ── Step 8: Confirm and dismiss ──
         ctx.logger.info("[Step 8] Confirm sweep and dismiss result")
-        await self._confirm_and_dismiss(ctx, run_log)
+        swept = await self._confirm_and_dismiss(ctx, run_log)
+        if not swept:
+            # Stamina insufficient - sweep cancelled, don't report success.
+            ctx.logger.warning("[Step 8] Sweep cancelled (stamina insufficient)")
+            await self._safe_return_to_hub(ctx)
+            return TaskResult(
+                status="skipped",
+                message="联防协议: 体力不足，扫荡取消",
+            )
 
         # ── Step 9: Collect 联防协议 rewards ──
         ctx.logger.info("[Step 9] Navigate back to collect 联防协议 rewards")
@@ -530,8 +538,13 @@ class JointDefenseSweep:
 
     async def _confirm_and_dismiss(
         self, ctx: TaskContext, run_log: RunLog | None,
-    ) -> None:
+    ) -> bool:
         """Confirm sweep popup and dismiss result screen.
+
+        Returns:
+            True if the sweep actually went through; False if it was
+            cancelled (stamina insufficient) and must NOT be reported
+            as a successful sweep.
 
         Flow:
         1. Sweep confirm popup → Enter (确定)
@@ -557,7 +570,7 @@ class JointDefenseSweep:
             await PressKeyOp(key=VK_ESCAPE, wait=0.5).run(ctx)
             if run_log:
                 run_log.snap(ctx.device, "jd_stamina_popup_canceled")
-            return  # Don't try to dismiss result — sweep didn't happen
+            return False  # Sweep didn't happen — caller must not report success
 
         # 3. Dismiss result screen — wait for animation, then rapid Enter
         await SleepOp(seconds=2.0).run(ctx)
@@ -566,6 +579,7 @@ class JointDefenseSweep:
 
         if run_log:
             run_log.snap(ctx.device, "jd_after_dismiss")
+        return True
 
     # ------------------------------------------------------------------
     # Step 9: Collect 联防协议 rewards

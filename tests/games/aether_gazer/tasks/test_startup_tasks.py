@@ -49,7 +49,7 @@ class MockDevice:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # -- Helpers --
@@ -202,8 +202,8 @@ class TestSkipStartupPopups:
             result = _run(task.execute(ctx))
 
         assert result.status == "success"
-        # Simplified logic: clicks (0.4, 0.05) for any non-hub, non-exit screen
-        assert (0.4, 0.05) in device.click_log
+        # Simplified logic: clicks (0.157, 0.59) for any non-hub, non-exit screen
+        assert (0.157, 0.59) in device.click_log
 
     def test_clicks_dismiss_for_event_forward_button(self):
         """When event popup with 限时 found, clicks dismiss position."""
@@ -230,7 +230,7 @@ class TestSkipStartupPopups:
              patch(_OCR_OCR_ONCE, side_effect=mock_ocr_once):
             result = _run(task.execute(ctx))
 
-        assert (0.4, 0.05) in device.click_log
+        assert (0.157, 0.59) in device.click_log
 
     def test_handles_login_screen(self):
         """Login screen gets a dismiss click."""
@@ -257,8 +257,8 @@ class TestSkipStartupPopups:
              patch(_OCR_OCR_ONCE, side_effect=mock_ocr_once):
             result = _run(task.execute(ctx))
 
-        # Simplified: clicks (0.4, 0.05) for login screen too
-        assert (0.4, 0.05) in device.click_log
+        # Simplified: clicks (0.157, 0.59) for login screen too
+        assert (0.157, 0.59) in device.click_log
 
     def test_fails_when_max_attempts_exceeded(self):
         """Returns failed when max attempts reached without hub."""
@@ -306,8 +306,8 @@ class TestSkipStartupPopups:
              patch(_OCR_OCR_ONCE, side_effect=mock_ocr_once):
             result = _run(task.execute(ctx))
 
-        # Simplified: clicks (0.4, 0.05) for idle screen too
-        assert (0.4, 0.05) in device.click_log
+        # Simplified: clicks (0.157, 0.59) for idle screen too
+        assert (0.157, 0.59) in device.click_log
 
 
 # -- LaunchAndReachHub Tests --

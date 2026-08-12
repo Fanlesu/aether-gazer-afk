@@ -477,7 +477,19 @@ class JointSpecialOpsSweep:
 
             # Step 5: Confirm and dismiss
             ctx.logger.info("[Step 5] Confirm sweep and dismiss result")
-            await self._confirm_and_dismiss(ctx)
+            swept = await self._confirm_and_dismiss(ctx)
+            if not swept:
+                # Stamina insufficient - sweep was cancelled, don't report
+                # a success that never happened.
+                ctx.logger.warning(
+                    "[Step 5] Sweep cancelled (stamina insufficient)"
+                )
+                await PressKeyOp(VK_ESCAPE, wait=1.0).run(ctx)
+                await ReturnToHubAction().run(ctx)
+                return TaskResult(
+                    status="skipped",
+                    message="联合特勤: 体力不足，扫荡取消",
+                )
 
             # Step 6: Return to hub
             ctx.logger.info("[Step 6] Return to hub")
@@ -589,7 +601,11 @@ class JointSpecialOpsSweep:
 
                 m1 = cv2.inRange(hsv, np.array([0, 80, 100]), np.array([15, 255, 255]))
                 m2 = cv2.inRange(hsv, np.array([165, 80, 100]), np.array([180, 255, 255]))
-                red_pct = (cv2.countNonZero(m1) + cv2.countNonZero(m2)) / roi.size * 300
+                # Red pixel percentage over the ROI. countNonZero counts
+                # single-channel pixels; divide by roi w*h (not roi.size,
+                # which includes the 3 channels) to get a true percentage.
+                roi_pixels = roi.shape[0] * roi.shape[1]
+                red_pct = (cv2.countNonZero(m1) + cv2.countNonZero(m2)) / roi_pixels * 100
 
                 ctx.logger.info(
                     f"[joint_ops] Card {i+1} at ({fx:.3f},{fy:.3f}): "
@@ -677,8 +693,14 @@ class JointSpecialOpsSweep:
     # Confirm and dismiss
     # ------------------------------------------------------------------
 
-    async def _confirm_and_dismiss(self, ctx: TaskContext) -> None:
-        """Confirm sweep popup and dismiss result screen."""
+    async def _confirm_and_dismiss(self, ctx: TaskContext) -> bool:
+        """Confirm sweep popup and dismiss result screen.
+
+        Returns:
+            True if the sweep actually went through; False if it was
+            cancelled (e.g. stamina insufficient) and should NOT be
+            reported as a successful sweep.
+        """
         # Confirm sweep
         ctx.logger.info("[joint_ops] Pressing Enter to confirm sweep")
         await PressKeyOp(VK_ENTER, wait=2.0).run(ctx)
@@ -691,9 +713,10 @@ class JointSpecialOpsSweep:
                 "[joint_ops] Stamina insufficient, pressing ESC to cancel"
             )
             await PressKeyOp(VK_ESCAPE, wait=0.5).run(ctx)
-            return
+            return False
 
         # Dismiss result screen
         await SleepOp(2.0).run(ctx)
         for _ in range(5):
             await PressKeyOp(VK_ENTER, wait=0.2).run(ctx)
+        return True

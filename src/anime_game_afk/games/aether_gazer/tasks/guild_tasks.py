@@ -135,8 +135,14 @@ class GuildSupplyClaim:
             run_log.snap(ctx.device, "guild_done")
 
         ctx.logger.info("=== GuildSupplyClaim: complete ===")
+        # Report the actions attempted, not asserted results — we clicked
+        # 领取 / 一键领取 but did not OCR-verify the rewards landed, so
+        # claiming supply_claimed=True here would be fabricating data.
         return TaskResult(
             status="success",
-            message="Guild supply + task rewards claimed",
-            data={"supply_claimed": True, "task_claimed": True},
+            message="Guild supply + task claim flow completed",
+            data={
+                "supply_clicked": True,
+                "task_clicked": True,
+            },
         )

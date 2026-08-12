@@ -61,7 +61,7 @@ class AmusementStreetDaily:
 
         # Step 1: Click 游园街
         ctx.logger.info(f"[Step 1] Click 游园街 at ({_AMUSEMENT_X},{_AMUSEMENT_Y})")
-        await ClickOp(x=_AMUSEMENT_X, y=_AMUSEMENT_Y, wait=1.5).run(ctx)
+        await ClickOp(x=_AMUSEMENT_X, y=_AMUSEMENT_Y, wait=2).run(ctx)
         if run_log:
             run_log.snap(ctx.device, "amusement_page")
 
@@ -277,7 +277,7 @@ class AmusementStreetDaily:
         cx = btn.region.x + btn.region.w // 2
         cy = btn.region.y + btn.region.h // 2
         ctx.logger.info(f"  train: clicking '前往训练' at ({cx},{cy})")
-        await ClickPxOp(px=cx, py=cy, wait=2.0).run(ctx)
+        await ClickPxOp(px=cx, py=cy, wait=3.0).run(ctx)
         if run_log:
             run_log.snap(ctx.device, "amusement_training_page")
 

@@ -407,9 +407,15 @@ class DeviceAdapter:
             try:
                 self._controller.post_click(ax, ay).wait()
             finally:
-                # Hold the clip a tiny bit longer than the click itself so
-                # the game's WM_LBUTTONUP handler sees a stable cursor.
-                time.sleep(0.02)
+                # Hold the clip longer than the click itself so Unity's
+                # WM_LBUTTONUP handler (which reads GetCursorPos in its own
+                # render frame) sees a stable cursor at the target. 20ms was
+                # too short - at 60fps a frame is ~17ms and a busy game
+                # frame can slip past that window, causing the cursor to
+                # already be back at orig_cursor when the game finally reads
+                # it -> click silently lands at the old position (the "cursor
+                # moved but nothing happened" symptom).
+                time.sleep(0.08)
                 if clipped:
                     self._clip_cursor_release()
                 if orig_cursor is not None:

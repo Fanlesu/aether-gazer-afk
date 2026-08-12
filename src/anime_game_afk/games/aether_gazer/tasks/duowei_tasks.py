@@ -103,8 +103,8 @@ class DuoweiCombat:
 
             # Action 5: Fight 1-2
             ctx.logger.info("[duowei] Action 5: Fight 1-2")
-            battle = await self._fight_battle(ctx)
-            ctx.logger.info(f"[duowei] Battle result: {battle}")
+            await self._fight_battle(ctx)
+            ctx.logger.info("[duowei] Battle finished")
 
             # Handle post-battle reward
             await SleepOp(2.0).run(ctx)
@@ -117,7 +117,7 @@ class DuoweiCombat:
             ctx.logger.info("=== DuoweiCombat: completed successfully ===")
             return TaskResult(
                 status="success",
-                message=f"多维变量 completed (battle: {battle})",
+                message="多维变量 completed",
             )
         except Exception as exc:
             ctx.logger.error(f"=== DuoweiCombat: failed — {exc} ===")
@@ -698,8 +698,13 @@ class DuoweiCombat:
 
     # ── Action 5: Combat ──
 
-    async def _fight_battle(self, ctx: TaskContext) -> str:
-        """Execute combat script until battle ends (with debounce)."""
+    async def _fight_battle(self, ctx: TaskContext) -> None:
+        """Execute combat script until battle ends (with debounce).
+
+        Returns None — AutoBattleService does not report win/loss, and we
+        cannot reliably judge it here either, so we honestly return nothing
+        instead of fabricating a "won" result.
+        """
         ctx.logger.info("[duowei] _fight_battle starting")
         await SleepOp(3.0).run(ctx)  # Wait for battle to fully load
 
@@ -719,7 +724,6 @@ class DuoweiCombat:
         await service.run_until_battle_ends(ctx, extra_confirms=3)
 
         ctx.logger.info("[duowei] Battle ended")
-        return "won"
 
     # ── Post-battle reward ──
 

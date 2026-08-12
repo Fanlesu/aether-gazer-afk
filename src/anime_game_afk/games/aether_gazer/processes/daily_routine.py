@@ -197,7 +197,16 @@ class DailyRoutine:
             f"  completed={completed}\n"
             f"  failed={failed}"
         )
+        # Report partial failure upward. Hardcoding "success" here made the
+        # pipeline log "1/1 succeeded" even when individual tasks failed or
+        # silently did nothing, which hid real breakage during debugging.
         return ProcessResult(
-            status="success",
+            status="success" if not failed else "failed",
+            message=(
+                f"{len(completed)} done, {len(failed)} failed: "
+                f"{', '.join(failed)}"
+                if failed
+                else f"{len(completed)} tasks completed"
+            ),
             data={"completed": completed, "failed": failed},
         )

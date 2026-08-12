@@ -59,7 +59,7 @@ def test_check_protocol():
 def test_trivial_check_evaluate():
     device = MockDevice()
     ctx = OpContext(device=device)
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         TrivialCheck().evaluate(ctx)
     )
     assert result.passed

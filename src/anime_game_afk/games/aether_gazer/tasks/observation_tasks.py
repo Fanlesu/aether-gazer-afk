@@ -22,31 +22,25 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickPxOp,
     PressKeyOp,
     ScreenshotOp,
-    SleepOp,
 )
+from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
 
 if TYPE_CHECKING:
     from anime_game_afk.runtime.run_log import RunLog
-
-
-# HSV low-red range for red dot detection
-_RED_LOW = (0, 120, 120)
-_RED_HIGH = (10, 255, 255)
-_RED_DOT_RATIO = 0.02
-_RED_REGION_SIZE = 20
 
 # Verified coordinates (2026-04-06, 1600x900 design resolution)
 # 弥弥观测站 button in daily tasks page (110,820 @ 1600x900)
 _MIMI_STATION_X, _MIMI_STATION_Y = 0.069, 0.911
 # 一键领取 button in 弥弥观测站 (1205,809 @ 1600x900, OCR verified center)
 _MIMI_CLAIM_X, _MIMI_CLAIM_Y = 0.753, 0.899
-# 周常任务 tab (estimated, left sidebar below 每日任务)
-_WEEKLY_TAB_X, _WEEKLY_TAB_Y = 0.05, 0.30
 
-# Red dot positions on daily tasks page (verified via coord-picker)
-_DAILY_TAB_RED_DOT = (0.828, 0.095)    # 日常任务 tab red dot
-_WEEKLY_TAB_RED_DOT = (0.052, 0.153)   # 周常任务 tab red dot
+# Red dot positions (verified via coord-picker)
+# Hub gate: mission entry red dot — if absent there is nothing to claim.
+_HUB_MISSION_RED_DOT = (0.828, 0.094)
+# Inside the daily/weekly panel, left sidebar tabs:
+_DAILY_TAB_RED_DOT = (0.058, 0.142)    # 日常任务 tab red dot
+_WEEKLY_TAB_RED_DOT = (0.058, 0.248)   # 周常任务 tab red dot (also the click target)
 
 
 class MimiStationCollect:
@@ -116,16 +110,17 @@ class DailyWeeklyMissionClaim:
     """Claim daily and weekly mission rewards.
 
     Flow:
-        hub → G(daily tasks) → screenshot
-        → red dot check: daily (0.828,0.095), weekly (0.052,0.153)
-        → skip if neither has red dot
-        → OCR "一键领取" on daily page → click ×5 (if daily dot)
-        → click 周常任务 tab (red dot coord) → click 返回
-        → OCR "一键领取" on weekly page → click ×5 ×2 (if weekly dot)
-        → return to hub
+        hub -> red dot check at (0.828, 0.094)
+        -> skip entire task if absent
+        -> G(daily/weekly panel)
+        -> daily tab red dot (0.058, 0.142)?  -> OCR "一键领取" -> click
+        -> weekly tab red dot (0.058, 0.248)? -> click that dot to switch tab
+                                              -> OCR "一键领取" -> click
+        -> return to hub
 
-    All claim clicks are OCR-driven — if "一键领取" is not found
-    the step is skipped. Red dot detection gates the whole task.
+    The hub dot is the gate: it lights up when either section has
+    something to claim. Inside the panel each sidebar tab carries its own
+    dot, so we only visit the sections that actually have rewards.
     """
 
     name = "daily_weekly_mission_claim"
@@ -135,67 +130,93 @@ class DailyWeeklyMissionClaim:
     requires_ocr = True
     safe = True
 
-    _DAILY_DOT = _DAILY_TAB_RED_DOT   # (0.828, 0.095)
-    _WEEKLY_DOT = _WEEKLY_TAB_RED_DOT  # (0.052, 0.153)
-
     async def can_run(self, ctx: TaskContext) -> bool:
-        return True
+        """Gate the task on the hub's mission red dot."""
+        ctx.logger.info("DailyWeeklyMissionClaim.can_run: hub red-dot check")
+        check = await RedDotCheck(
+            *_HUB_MISSION_RED_DOT, label="hub-mission",
+        ).evaluate(ctx)
+        ctx.logger.info(
+            f"DailyWeeklyMissionClaim.can_run: hub dot={check.data:.3f} "
+            f"-> {'run' if check.passed else 'skip'}"
+        )
+        return check.passed
 
     async def execute(self, ctx: TaskContext) -> TaskResult:
         run_log: RunLog | None = getattr(ctx, "run_log", None)
         ctx.logger.info("=== DailyWeeklyMissionClaim: starting ===")
 
-        # Step 1: G → daily tasks
-        ctx.logger.info("[Step 1] Press G → daily tasks")
-        await PressKeyOp(VK_G, wait=1.5).run(ctx)
-
-        # Step 2: Screenshot + red dot check on both tabs
-        ctx.logger.info("[Step 2] Red dot check on daily/weekly tabs")
-        screenshot = await ScreenshotOp().run(ctx)
-        _h, _w = screenshot.data.shape[:2]
-        if run_log:
-            run_log.snap(ctx.device, "mission_daily_tasks")
-
-        daily_dot = self._check_red_dot(screenshot.data, *_DAILY_TAB_RED_DOT, _w, _h)
-        weekly_dot = self._check_red_dot(screenshot.data, *_WEEKLY_TAB_RED_DOT, _w, _h)
+        # Step 1: Hub red dot gate
         ctx.logger.info(
-            f"[Step 2] Red dots — daily={daily_dot}, weekly={weekly_dot}"
+            f"[Step 1] Hub red dot check at {_HUB_MISSION_RED_DOT}"
         )
+        shot = await ScreenshotOp().run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "mission_hub_redot")
 
-        if not daily_dot and not weekly_dot:
-            ctx.logger.info("[Step 2] Neither tab has red dot — skipping")
-            await ReturnToHubAction().run(ctx)
+        hub_check = await RedDotCheck(
+            *_HUB_MISSION_RED_DOT, label="hub-mission", image=shot.data,
+        ).evaluate(ctx)
+        hub_ratio = hub_check.data
+        ctx.logger.info(f"[Step 1] Hub dot ratio={hub_ratio:.3f}")
+        if hub_ratio <= 0:
+            ctx.logger.info("[Step 1] No hub red dot - skipping")
             return TaskResult(
                 status="skipped",
-                message="No red dot on daily or weekly mission tabs",
+                message="No red dot on hub mission entry",
             )
+
+        # Step 2: G -> daily/weekly panel
+        ctx.logger.info("[Step 2] Press G -> daily/weekly panel")
+        await PressKeyOp(VK_G, wait=1.5).run(ctx)
+
+        # Step 3: Screenshot the panel, read both sidebar tab dots
+        panel = await ScreenshotOp().run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "mission_panel_redot")
+
+        daily_check = await RedDotCheck(
+            *_DAILY_TAB_RED_DOT, label="daily-tab", image=panel.data,
+        ).evaluate(ctx)
+        weekly_check = await RedDotCheck(
+            *_WEEKLY_TAB_RED_DOT, label="weekly-tab", image=panel.data,
+        ).evaluate(ctx)
+        daily_ratio = daily_check.data
+        weekly_ratio = weekly_check.data
+        ctx.logger.info(
+            f"[Step 3] Tab dots - daily={daily_ratio:.3f}, "
+            f"weekly={weekly_ratio:.3f}"
+        )
 
         claimed = 0
 
-        # Step 3: Claim daily (if red dot)
-        if daily_dot:
-            claimed += await self._claim_section(
-                ctx, "daily", 5,
-            )
-
-        # Step 4: Switch to 周常任务 tab (if weekly red dot, but also try
-        # even if daily was the only dot — user has no weekly dot but
-        # might have a pending secondary weekly claim)
-        if weekly_dot:
-            ctx.logger.info("[Step 4] Switch to 周常任务 tab")
-            await self._switch_to_weekly(ctx)
+        # Step 4: Claim daily (already the active tab after G)
+        if daily_ratio > 0:
+            ctx.logger.info("[Step 4] Daily tab has red dot - claiming")
+            claimed += await self._claim_section(ctx, "daily", 5)
             if run_log:
-                run_log.snap(ctx.device, "mission_weekly")
+                run_log.snap(ctx.device, "mission_after_daily")
+        else:
+            ctx.logger.info("[Step 4] No daily red dot - skipped")
 
-            claimed += await self._claim_section(
-                ctx, "weekly-primary", 5,
+        # Step 5: Switch to the weekly tab by clicking its red dot, then claim
+        if weekly_ratio > 0:
+            wx, wy = _WEEKLY_TAB_RED_DOT
+            ctx.logger.info(
+                f"[Step 5] Weekly tab has red dot - clicking ({wx}, {wy})"
             )
-            claimed += await self._claim_section(
-                ctx, "weekly-secondary", 5,
-            )
+            await ClickOp(x=wx, y=wy, wait=1.0).run(ctx)
+            if run_log:
+                run_log.snap(ctx.device, "mission_weekly_tab")
 
-        # Step 5: Return to hub
-        ctx.logger.info("[Step 5] Return to hub")
+            claimed += await self._claim_section(ctx, "weekly", 5)
+            if run_log:
+                run_log.snap(ctx.device, "mission_after_weekly")
+        else:
+            ctx.logger.info("[Step 5] No weekly red dot - skipped")
+
+        # Step 6: Return to hub
+        ctx.logger.info("[Step 6] Return to hub")
         await ReturnToHubAction().run(ctx)
         if run_log:
             run_log.snap(ctx.device, "mission_done")
@@ -231,60 +252,6 @@ class DailyWeeklyMissionClaim:
         ctx.logger.info(f"  [{label}] '一键领取' not found — skipped")
         return 0
 
-    async def _switch_to_weekly(self, ctx: TaskContext) -> None:
-        """Switch to 周常任务 tab via OCR, fallback to fixed coord."""
-        await SleepOp(seconds=0.5).run(ctx)
-        result = await FindTextCheck(target="周常任务").evaluate(ctx)
-        if result.passed:
-            tab = result.data
-            wx = tab.region.x + tab.region.w // 2
-            wy = tab.region.y + tab.region.h // 2
-            ctx.logger.info(f"  Found '周常任务' at ({wx},{wy})")
-            await ClickPxOp(px=wx, py=wy, wait=0.2).run(ctx)
-            await ClickPxOp(px=wx, py=wy, wait=1.0).run(ctx)
-        else:
-            ctx.logger.warning("  '周常任务' OCR failed, using fallback coord")
-            await ClickOp(x=_WEEKLY_TAB_X, y=_WEEKLY_TAB_Y, wait=0.2).run(ctx)
-            await ClickOp(x=_WEEKLY_TAB_X, y=_WEEKLY_TAB_Y, wait=1.0).run(ctx)
-
-        # Click 返回 button
-        back_result = await FindTextCheck(target="返回").evaluate(ctx)
-        if back_result.passed:
-            btn = back_result.data
-            bx = btn.region.x + btn.region.w // 2
-            by = btn.region.y + btn.region.h // 2
-            await ClickPxOp(px=bx, py=by, wait=1.0).run(ctx)
-        else:
-            await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
-
-    @staticmethod
-    def _check_red_dot(img, fx: float, fy: float, w: int, h: int) -> bool:
-        """Check for red dot at normalized coords (fx, fy) in a BGR image."""
-        import cv2
-        import numpy as np
-
-        cx = int(fx * w)
-        cy = int(fy * h)
-        hs = _RED_REGION_SIZE // 2
-        crop = img[cy - hs:cy + hs, cx - hs:cx + hs]
-
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        mask_low = cv2.inRange(
-            hsv,
-            np.array(_RED_LOW, dtype=np.uint8),
-            np.array(_RED_HIGH, dtype=np.uint8),
-        )
-        mask_high = cv2.inRange(
-            hsv,
-            np.array((170, 120, 120), dtype=np.uint8),
-            np.array((180, 255, 255), dtype=np.uint8),
-        )
-        mask = mask_low | mask_high
-        total = mask.size
-        if total == 0:
-            return False
-        ratio = float(np.count_nonzero(mask)) / total
-        return ratio > _RED_DOT_RATIO
 
 
 class TacticsTaskClaim:
