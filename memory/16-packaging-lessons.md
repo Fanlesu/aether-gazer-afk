@@ -104,4 +104,9 @@
 **规则**:
 - `build.py` 在 PyInstaller 前必须卸载普通 `onnxruntime`，再 `--force-reinstall --no-deps onnxruntime-directml`。
 - 构建前必须验证 `onnxruntime.get_available_providers()` 至少包含 `CPUExecutionProvider`，有 GPU 时应包含 `DmlExecutionProvider`。
-- OCR 初始化失败必须记录真实异常，不能只报“RapidOCR not installed”，否则会误导为依赖没装或权限问题。
+- OCR 初始化失败必须记录真实异常，不能只报”RapidOCR not installed”，否则会误导为依赖没装或权限问题。
+
+### 21. `webview.start()` 返回后的清理必须异步，不能同步调 `shutdown()`
+**问题**: d26db71 把 `app.py` 中 `webview.start()` 返回后的 `_start_shutdown_thread(“post-webview.start”)` 改成同步 `_do_shutdown(...)`。点 ✕ 关闭时 `window.closing` 已标记 shutdown guard，`_do_shutdown` 被跳过所以正常；但跑完任务后由 post-run action（`exit_app` / `exit_app_and_game`）的 `window.destroy()` 触发的退出路径**不经过 closing event**，guard 未标记，`_do_shutdown` 同步跑 `task_manager.shutdown()`（含多个 `join/wait` + `hotkey_listener.stop()` 无 timeout）。一旦阻塞，`_kill_webview2_processes()` 和 `os._exit(0)` 到不了，msedgewebview2.exe 孤儿进程残留成任务栏/托盘图标，无法关闭。
+**规则**: `webview.start()` 之后的清理**只能异步**（`_start_shutdown_thread`），主线程必须无条件快速到达 `_kill_webview2_processes()` + `os._exit(0)`。worker 子进程由 Job Object KILL_ON_CLOSE 在进程退出时由内核回收，不依赖 Python 层 `shutdown()` 跑完。所有关闭路径（✕ / Alt+F4 / post-action destroy / 异常）都靠这一条兜底。
+**修复** (2026-08-13): 改回 `_start_shutdown_thread(“post-webview.start”)`，保留 d26db71 的 `_kill_webview2_processes()`。

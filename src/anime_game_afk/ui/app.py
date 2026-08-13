@@ -242,8 +242,18 @@ def main() -> None:
 
     webview.start(debug="--debug" in sys.argv)
 
-    # 7. Cleanup after window closes
-    _do_shutdown("post-webview.start")
+    # 7. Cleanup after window closes - MUST stay non-blocking.
+    #    window.closing already started shutdown on a background thread. If
+    #    closing did NOT fire (e.g. a post-run "exit app" action calls
+    #    window.destroy(), which bypasses the closing event on some pywebview
+    #    versions), start shutdown async here too. Either way the main thread
+    #    must NOT wait on task_manager.shutdown() (it joins worker/auto-battle
+    #    threads and calls hotkey_listener.stop() with no timeout) - if it
+    #    blocks, os._exit(0) never runs and the WebView2 child processes
+    #    (msedgewebview2.exe) are orphaned as a lingering tray icon. Worker
+    #    subprocesses are reaped by the Job Object on process exit regardless,
+    #    so async cleanup is safe.
+    _start_shutdown_thread("post-webview.start")
     task_manager.disconnect()
 
     # 8. Force-exit — kill stray WebView2 processes, then hard exit.
