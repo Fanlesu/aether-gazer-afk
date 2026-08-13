@@ -34,6 +34,9 @@ Stores structured notes about project decisions, architecture, lessons learned, 
 | `18-virtual-desktop-background.md` | Virtual desktop background mode (abandoned) |
 | `19-duowei-runner-findings.md` | Multi-dimensional variable automation findings |
 | `20-local-vlm-feasibility.md` | Local VLM feasibility study (not recommended) |
+| `21-theme-system.md` | 12-theme CSS variable system |
+| `22-combo-recording.md` | Combo recording feature (F9/F11, pynput, compile to steps) |
+| `23-honest-reporting-robustness-fixes.md` | P1-P5 review fixes: honest reporting, resolution robustness, OCR perf, dead code, tests |
 | `00-PACKAGING-INDEX.md` | Packaging documentation index |
 | `PACKAGING-QUICK-REFERENCE.md` | Packaging quick reference card |
 | `PACKAGING-SUMMARY-TABLE.md` | Packaging summary table |

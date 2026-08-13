@@ -62,3 +62,11 @@ game window size and aspect ratio.
 
 ## Design Spec
 `docs/superpowers/specs/2026-04-17-resolution-agnostic-pipeline-design.md`
+
+## Post-refactor Patches (2026-08, working tree)
+
+The original refactor migrated page/nav coords to fractional but left gaps that surfaced in code review - fixed in P2 of the 2026-08 batch (`memory/23-honest-reporting-robustness-fixes.md`):
+
+1. **OCR-result coordinate conversion** - `duowei_tasks.py` hardcoded `/1280, /720` when converting OCR pixel regions back to fractional clicks. Screenshots are downscaled to height ≤720 but **never upscaled**, so on a sub-720p window the screenshot is smaller than 1280×720 and every click landed ~20% off. Fixed with a `_ocr_frac(ctx, r)` helper using `ctx.device.resolution`.
+2. **OCR region as fractional** - `vision/ocr.py` `_resolve_region()` now accepts fractional regions (all coords in [0,1] auto-scale to image size), so OCR `Rect` regions can be resolution-independent like page coords. `activity_tasks._H_SEARCH_REGION` / `_LEFT_COLUMN` migrated to fractional.
+3. **Fixed pixel offsets** - `activity_tasks` `hy+50`, `amusement_tasks` `cy-49` / `+50` now scale by the current screenshot size instead of assuming 720p.

@@ -50,6 +50,11 @@ Lessons from Wave 1 code review. **Must check for these in all future code.**
 - `test_mail_tasks.py`: Patch `SmartReturnToHubOp.run` instead of `mail_tasks.smart_return_to_hub`
 - `test_shop_tasks.py`: Patch `checks.ocr.ocr_find` instead of `shop_tasks.ocr_find`
 
+### 9. Fake Success Reporting / Fabricated Data
+**Problem**: 4 tasks reported `success` when they actually skipped/cancelled/failed - `keyin_tasks`/`activity_tasks` sweep cancelled on low stamina still returned success; `guild_tasks.data` fabricated "已验证领取成功"; `duowei_tasks._fight_battle` unconditionally returned a fake `won`.
+**Rule**: Tasks must NEVER report `success` or fabricate `data` for outcomes they did not verify. Cancelled / insufficient-stamina / unreachable paths must return `skipped` (with an honest message); failed sub-tasks must bubble up as `failed` with their names listed, never masked as success.
+**Fix** (2026-08-12, commit a09221d): `_confirm_and_dismiss` returns bool; guild `data` records the action taken (`supply_clicked`); `_fight_battle` returns `None`; `daily_routine` reports failed sub-tasks by name. See `memory/23-honest-reporting-robustness-fixes.md`.
+
 ## Checklist for Future Code Reviews
 
 - [ ] Layer isolation: does each file only import from lower layers?
@@ -60,3 +65,4 @@ Lessons from Wave 1 code review. **Must check for these in all future code.**
 - [ ] Mutable globals: no shared mutable sentinels returned to callers?
 - [ ] Simulated key holds: using rapid presses, not press+sleep?
 - [ ] Test mocks: patch paths match where the function is actually imported?
+- [ ] Honesty: does the task return success / fabricate data ONLY for verified outcomes? Cancelled/failed paths report skipped/failed?
