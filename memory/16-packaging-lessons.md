@@ -106,7 +106,11 @@
 - 构建前必须验证 `onnxruntime.get_available_providers()` 至少包含 `CPUExecutionProvider`，有 GPU 时应包含 `DmlExecutionProvider`。
 - OCR 初始化失败必须记录真实异常，不能只报”RapidOCR not installed”，否则会误导为依赖没装或权限问题。
 
-### 21. `webview.start()` 返回后的清理必须异步，不能同步调 `shutdown()`
-**问题**: d26db71 把 `app.py` 中 `webview.start()` 返回后的 `_start_shutdown_thread(“post-webview.start”)` 改成同步 `_do_shutdown(...)`。点 ✕ 关闭时 `window.closing` 已标记 shutdown guard，`_do_shutdown` 被跳过所以正常；但跑完任务后由 post-run action（`exit_app` / `exit_app_and_game`）的 `window.destroy()` 触发的退出路径**不经过 closing event**，guard 未标记，`_do_shutdown` 同步跑 `task_manager.shutdown()`（含多个 `join/wait` + `hotkey_listener.stop()` 无 timeout）。一旦阻塞，`_kill_webview2_processes()` 和 `os._exit(0)` 到不了，msedgewebview2.exe 孤儿进程残留成任务栏/托盘图标，无法关闭。
-**规则**: `webview.start()` 之后的清理**只能异步**（`_start_shutdown_thread`），主线程必须无条件快速到达 `_kill_webview2_processes()` + `os._exit(0)`。worker 子进程由 Job Object KILL_ON_CLOSE 在进程退出时由内核回收，不依赖 Python 层 `shutdown()` 跑完。所有关闭路径（✕ / Alt+F4 / post-action destroy / 异常）都靠这一条兜底。
-**修复** (2026-08-13): 改回 `_start_shutdown_thread(“post-webview.start”)`，保留 d26db71 的 `_kill_webview2_processes()`。
+### 21. tray icon 残留：`webview.start()` teardown 挂住，main 线程到不了 `os._exit`
+**问题（日志证实 2026-08-13）**: frozen v0.3.0 跑完任务后点 ✕，日志连续出现 `Shutdown triggered by: window.closing` → `TaskManager shutdown initiated` → `HotkeyListener: thread exited` → `TaskManager shutdown complete`，之后无记录，但进程不退出、任务栏图标残留。daemon 线程的 `shutdown()` 已跑完，真正卡点在 `webview.start()`——它在 WebView2 teardown 阶段挂住、**不返回**，main 线程卡在 `webview.start()` 内部，永远到不了它后面的 `_kill_webview2_processes()` + `os._exit(0)`。closing event 在 pywebview UI 线程触发并处理完，**不代表** `webview.start()` 会解除阻塞。
+**次要路径**: d26db71 还把 `webview.start()` 返回后的清理从异步 `_start_shutdown_thread` 改成同步 `_do_shutdown`——若 post-action `window.destroy()` 不触发 closing，`_do_shutdown` 会同步阻塞在 `shutdown()` 上。隐患同向（`os._exit` 到不了），但日志未命中此路径。
+**规则**: 退出**不能依赖** main 线程走到 `webview.start()` 之后的 `os._exit`。daemon 关闭线程在 `shutdown()` 跑完后**必须主动** `_kill_webview2_processes()` + `os._exit(0)`，从该线程终止进程以绕过卡住的 `webview.start()`。`webview.start()` 之后的清理保持异步（`_start_shutdown_thread`），main 线程的 `os._exit` 作为兜底（daemon 已退出则不执行，幂等）。worker 子进程由 Job Object KILL_ON_CLOSE 内核回收，不依赖 Python 层 `shutdown()` 跑完。
+**修复** (2026-08-13):
+- `_run_shutdown()` 末尾加 `_kill_webview2_processes()` + `os._exit(0)`（核心修复，命中日志场景）
+- `webview.start()` 之后改回异步 `_start_shutdown_thread(“post-webview.start”)`（覆盖 post-action destroy 不触发 closing 的次要路径）
+- **验证**: 待重新打包 frozen 实测；当前仅日志分析 + py_compile + shutdown 单测（4 passed）

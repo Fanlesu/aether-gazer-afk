@@ -171,6 +171,16 @@ def main() -> None:
             log_forwarder.uninstall()
         except Exception:
             pass
+        # Force-exit from THIS thread, not the main thread. window.closing can
+        # fire while webview.start() is stuck in WebView2 teardown - the main
+        # thread then never reaches its own os._exit below, leaving the process
+        # and its msedgewebview2.exe children lingering as a tray icon. Once
+        # shutdown() has finished, there is nothing left to wait for: exit now.
+        # (Called from the closing/post-webview.start daemon thread, atexit,
+        # and signal handlers - all paths converge here.)
+        _kill_webview2_processes()
+        import os as _os
+        _os._exit(0)
 
     def _do_shutdown(reason: str) -> None:
         # Lock guarantees only one caller proceeds, even if window.closing,
