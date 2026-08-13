@@ -208,3 +208,86 @@ def test_claim_free_stamina_skips_when_cooldown():
 
     assert result.status == "skipped"
     assert "cooldown" in result.message.lower()
+
+
+# -- ClaimDailyStaminaPacks --
+
+from anime_game_afk.games.aether_gazer.tasks.shop_tasks import (  # noqa: E402
+    ClaimDailyStaminaPacks,
+)
+
+
+def test_daily_stamina_name():
+    assert ClaimDailyStaminaPacks.name == "claim_daily_stamina_packs"
+
+
+def test_daily_stamina_metadata():
+    assert ClaimDailyStaminaPacks.category == "daily_resource"
+    assert ClaimDailyStaminaPacks.safe is True
+
+
+def test_daily_stamina_can_run_always():
+    """can_run is unconditional (red-dot gate lives inside execute)."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    assert _run(ClaimDailyStaminaPacks().can_run(ctx)) is True
+
+
+def test_daily_stamina_skips_without_red_dot():
+    """No red dot on stamina entry → task skips before any navigation."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    # color_ratio returns 0 for a pure-black screenshot's top-left; patch
+    # it to force no red dot and assert we skip without touching ops.
+    with patch(f"{_SHOP}.color_ratio", return_value=0.0) as mock_cr:
+        result = _run(ClaimDailyStaminaPacks().execute(ctx))
+    mock_cr.assert_called_once()
+    assert result.status == "skipped"
+    assert "red dot" in result.message.lower()
+
+
+def test_daily_stamina_returns_failed_when_cannot_reach_hub():
+    """If returning to hub fails, task reports failed (not false success)."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    with (
+        patch(f"{_SHOP}.color_ratio", return_value=0.1),  # red dot present
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=False))),
+        patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+    ):
+        result = _run(ClaimDailyStaminaPacks().execute(ctx))
+    assert result.status == "failed"
+
+
+def test_daily_stamina_claims_packs_on_success():
+    """Happy path: hub reached, stamina read, packs claimed, gain verified."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    with (
+        patch(f"{_SHOP}.color_ratio", return_value=0.1),  # red dot present
+        patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        # Mock the private helpers so no real OCR/panel interaction.
+        # _read_stamina is called twice (before / after); side_effect yields
+        # 100 then 160 so the gain computation is exercised.
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina",
+            new=AsyncMock(side_effect=[100, 160]),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_open_stamina_panel",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_claim_packs",
+            new=AsyncMock(return_value=2),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina_from_panel",
+            new=AsyncMock(return_value=160),
+        ),
+    ):
+        result = _run(ClaimDailyStaminaPacks().execute(ctx))
+    assert result.status == "success"
+    assert result.data["claimed"] == 2
+    assert result.data["stamina_gained"] == 60

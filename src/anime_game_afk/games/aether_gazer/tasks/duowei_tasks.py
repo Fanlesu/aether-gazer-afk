@@ -41,6 +41,24 @@ _REWARD_CONFIRM = (0.608, 0.847)    # "确认" overlap zone (92% of single-card 
 _SCREEN_CENTER = (0.50, 0.40)       # Center click to select card / dismiss
 
 
+def _ocr_frac(ctx: TaskContext, r) -> tuple[float, float]:
+    """Convert an OCR text region's center to fractional click coords.
+
+    OCR regions are in the scaled screenshot's pixel space. The screenshot
+    is downscaled so height ≤ MAX_HEIGHT(720), but NOT upscaled — on a
+    window smaller than 720p the screenshot is smaller than 1280x720, so
+    hardcoding /1280,/720 would put every click ~20% off target.
+
+    Use the device's *current* screenshot resolution (matches the image the
+    OCR ran on) instead of a fixed 1280x720.
+    """
+    w, h = ctx.device.resolution
+    return (
+        (r.x + r.w / 2) / w,
+        (r.y + r.h / 2) / h,
+    )
+
+
 class DuoweiCombat:
     """Run one 多维变量 cycle: navigate → setup → 1-1 → portal → 1-2 → exit.
 
@@ -171,8 +189,7 @@ class DuoweiCombat:
                 # Only one match — click it, then re-check if we landed
                 # on the detail page or just highlighted the heading
                 r = matches[0].region
-                ctx.device.click(
-                    (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                ctx.device.click(*_ocr_frac(ctx, r),
                 )
                 await SleepOp(2.0).run(ctx)
                 img = ctx.screenshot()
@@ -188,8 +205,7 @@ class DuoweiCombat:
                 if len(matches2) >= 2:
                     best = max(matches2, key=lambda r: r.region.y)
                     r = best.region
-                    ctx.device.click(
-                        (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                    ctx.device.click(*_ocr_frac(ctx, r),
                     )
                     await SleepOp(2.0).run(ctx)
                     img = ctx.screenshot()
@@ -201,8 +217,7 @@ class DuoweiCombat:
                 # Multiple matches — click the lowest one (card icon)
                 best = max(matches, key=lambda r: r.region.y)
                 r = best.region
-                ctx.device.click(
-                    (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                ctx.device.click(*_ocr_frac(ctx, r),
                 )
                 await SleepOp(2.0).run(ctx)
                 img = ctx.screenshot()
@@ -229,8 +244,7 @@ class DuoweiCombat:
             if match:
                 ctx.logger.info(f"[duowei] Clicking '{label}' button")
                 r = match.region
-                ctx.device.click(
-                    (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                ctx.device.click(*_ocr_frac(ctx, r),
                 )
                 await SleepOp(self._SETUP_WAIT).run(ctx)
 
@@ -250,9 +264,7 @@ class DuoweiCombat:
                     match3 = ocr3.find("开始挑战")
                     if match3:
                         r3 = match3.region
-                        ctx.device.click(
-                            (r3.x + r3.w // 2) / 1280,
-                            (r3.y + r3.h // 2) / 720,
+                        ctx.device.click(*_ocr_frac(ctx, r3),
                         )
                         await SleepOp(self._SETUP_WAIT).run(ctx)
                 return True
@@ -310,8 +322,7 @@ class DuoweiCombat:
                 txt = item.text.strip().lower().replace(" ", "")
                 if txt == target_str:
                     r = item.region
-                    ctx.device.click(
-                        (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                    ctx.device.click(*_ocr_frac(ctx, r),
                     )
                     ctx.logger.info(
                         f"[duowei] Clicked LV{target_lv} at ({r.x},{r.y})"
@@ -338,9 +349,7 @@ class DuoweiCombat:
         match = ocr.find(text)
         if match:
             r = match.region
-            ctx.device.click(
-                (r.x + r.w // 2) / 1280,
-                (r.y + r.h // 2) / 720,
+            ctx.device.click(*_ocr_frac(ctx, r),
             )
             ctx.logger.debug(f"[duowei] {label}: clicked {text}")
             return True
@@ -556,9 +565,7 @@ class DuoweiCombat:
                 match = ocr.find(name)
                 if match:
                     r = match.region
-                    ctx.device.click(
-                        (r.x + r.w // 2) / 1280,
-                        (r.y + r.h // 2) / 720,
+                    ctx.device.click(*_ocr_frac(ctx, r),
                     )
                     selected.add(name)
                     found_any = True
@@ -766,8 +773,7 @@ class DuoweiCombat:
                 match = ocr.find("确认")
                 if match:
                     r = match.region
-                    ctx.device.click(
-                        (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                    ctx.device.click(*_ocr_frac(ctx, r),
                     )
                 else:
                     ctx.device.press_key(VK_ENTER)
@@ -821,8 +827,7 @@ class DuoweiCombat:
             match = ocr.find("退出")
             if match:
                 r = match.region
-                ctx.device.click(
-                    (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                ctx.device.click(*_ocr_frac(ctx, r),
                 )
                 await SleepOp(2.0).run(ctx)
                 continue
@@ -832,8 +837,7 @@ class DuoweiCombat:
                 match = ocr.find(label)
                 if match:
                     r = match.region
-                    ctx.device.click(
-                        (r.x + r.w // 2) / 1280, (r.y + r.h // 2) / 720,
+                    ctx.device.click(*_ocr_frac(ctx, r),
                     )
                     await SleepOp(2.0).run(ctx)
                     break

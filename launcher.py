@@ -363,11 +363,20 @@ def _run_worker() -> None:
 
 
 def _run_scheduled(app_dir: Path) -> None:
-    """Run in scheduled mode — open normal GUI and auto-start the pipeline."""
-    # Just set a flag; the GUI app will detect it and auto-start
-    import builtins
-    builtins._SCHEDULED_MODE = True  # type: ignore[attr-defined]
-    _run_gui(app_dir)
+    """Run in scheduled mode — headless, no GUI window.
+
+    Uses :class:`HeadlessRunner` so the schedule actually applies its
+    retry_on_failure / post_action settings and writes a schedule log,
+    instead of silently ignoring them (the previous behaviour opened the
+    GUI and auto-started, but never retried).
+
+    Exit code: 0 on success, 1 on failure.
+    """
+    del app_dir  # unused — headless mode needs no GUI app dir
+    from anime_game_afk.runtime.headless import HeadlessRunner
+
+    runner = HeadlessRunner()
+    sys.exit(runner.run())
 
 
 def main() -> None:

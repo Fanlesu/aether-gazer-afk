@@ -69,9 +69,9 @@ class JointDefenseSweep:
 
     # H shortcut label search region (right side of hub)
     # At screenshot resolution (1280×720): x=1040..1200, y=80..160
-    _H_SEARCH_REGION = Rect(1040, 80, 160, 80)
+    _H_SEARCH_REGION = Rect(0.8125, 0.1111, 0.125, 0.1111)
     # Activity list left column
-    _LEFT_COLUMN = Rect(0, 80, 320, 560)
+    _LEFT_COLUMN = Rect(0.0, 0.1111, 0.25, 0.7778)
     # Multiplier buttons: 5-button layout << < [xN] > >>
     # Pixel-mapped from 008_jd_after_max_multi.jpg darkness scan:
     #   << button: half(590,355) = full(1180,710)  ← reset to min
@@ -238,7 +238,10 @@ class JointDefenseSweep:
             hx = h_label.region.x + h_label.region.w // 2
             hy = h_label.region.y + h_label.region.h // 2
             click_px = hx
-            click_py = hy + 50  # Activity entrance is ~50px below H
+            # Activity entrance is ~50px below H (720p reference); scale to
+            # the screenshot the OCR ran on (scan.image).
+            _img_h = scan.image.shape[0]
+            click_py = hy + int(50 * _img_h / 720)
             ctx.logger.info(
                 f"  nav: H found at ({hx},{hy}), "
                 f"clicking activity at ({click_px},{click_py})"

@@ -78,7 +78,10 @@ class DeviceAdapter:
         self._input_lock = threading.Lock()
         # Low-level mouse hook guard: pins the cursor in place while we
         # click, so a user moving the mouse cannot deflect the click.
-        # Started lazily on first connect(); stopped on disconnect().
+        # NOTE: this guard is instantiated but NOT started — cursor pinning
+        # is instead done inline in click() via SetCursorPos + ClipCursor
+        # (see click() below). InputGuard.start()/stop() are currently
+        # unused; do not claim the hook is active.
         self._input_guard: InputGuard = InputGuard()
 
     # ------------------------------------------------------------------
@@ -284,8 +287,10 @@ class DeviceAdapter:
            state from its internal worker thread.
         2. ``release_all_held_keys()`` sends ``key_up`` for every recovery
            VK and OS-level ``SendInput`` ``KEYUP`` for modifier keys.
-        3. ``InputGuard.stop()`` uninstalls the ``WH_MOUSE_LL`` hook.
-        4. Local state is cleared and the controller reference dropped.
+        3. Local state is cleared and the controller reference dropped.
+
+        (``InputGuard.stop()`` is intentionally NOT called — the guard is
+        never started; cursor pinning happens inline in click().)
 
         Best-effort throughout — disconnect must never raise.
         """

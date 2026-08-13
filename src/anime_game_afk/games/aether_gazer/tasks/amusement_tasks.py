@@ -309,8 +309,10 @@ class AmusementStreetDaily:
             btn = lv20_result.data
             cx = btn.region.x + btn.region.w // 2
             cy = btn.region.y + btn.region.h // 2
-            # "20" is at the card bottom; click ~49px above to hit the avatar
-            click_y = cy - 49
+            # "20" is at the card bottom; click ~49px above (720p reference)
+            # to hit the avatar. Scale the offset to the current screenshot.
+            _img_h = ctx.screenshot().shape[0]
+            click_y = cy - int(49 * _img_h / 720)
             ctx.logger.info(
                 f"  train: '20' found at ({cx},{cy}), double-clicking ({cx},{click_y})"
             )
@@ -371,8 +373,9 @@ class AmusementStreetDaily:
         if sheng_result.passed:
             btn = sheng_result.data
             # "挑战" button is to the right of "稍胜一筹"
-            # Estimate: right edge of text + offset
-            challenge_x = btn.region.x + btn.region.w + 50
+            # Estimate: right edge of text + offset (50px at 720p, scaled).
+            _img_w = ctx.screenshot().shape[1]
+            challenge_x = btn.region.x + btn.region.w + int(50 * _img_w / 1280)
             challenge_y = btn.region.y + btn.region.h // 2
             ctx.logger.info(
                 f"  pvp: '稍胜一筹' found at x={btn.region.x}, "
