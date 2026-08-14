@@ -171,16 +171,13 @@ def main() -> None:
             log_forwarder.uninstall()
         except Exception:
             pass
-        # Force-exit from THIS thread, not the main thread. window.closing can
-        # fire while webview.start() is stuck in WebView2 teardown - the main
-        # thread then never reaches its own os._exit below, leaving the process
-        # and its msedgewebview2.exe children lingering as a tray icon. Once
-        # shutdown() has finished, there is nothing left to wait for: exit now.
-        # (Called from the closing/post-webview.start daemon thread, atexit,
-        # and signal handlers - all paths converge here.)
-        _kill_webview2_processes()
-        import os as _os
-        _os._exit(0)
+        # NOTE: deliberately no os._exit() here. Hard-killing the process from
+        # this (closing-event) thread races the window's own WM_DESTROY and
+        # leaves a GHOST TASKBAR BUTTON — the process is gone but the button
+        # stays in the taskbar and cannot be closed. Let the window close
+        # normally and the process exit naturally. If webview.start() is truly
+        # stuck in WebView2 teardown, the 15s fallback timer in
+        # _on_window_closing force-exits instead.
 
     def _do_shutdown(reason: str) -> None:
         # Lock guarantees only one caller proceeds, even if window.closing,
@@ -219,6 +216,24 @@ def main() -> None:
         # Mark shutdown as started before returning so the main thread will
         # not run blocking cleanup after webview.start() unblocks.
         _start_shutdown_thread("window.closing")
+        # Fallback safety net: the normal path lets the window close and the
+        # process exit naturally (no force-exit -> taskbar button disappears
+        # cleanly). If webview.start() is genuinely stuck in WebView2 teardown,
+        # nothing else would end the process, so hard-exit after a grace
+        # period. os._exit here can still leave a ghost taskbar button, but a
+        # live lingering process is strictly worse. daemon=True so a normal
+        # fast exit is not delayed by this timer.
+        import os as _os
+        _t = threading.Timer(
+            15.0,
+            lambda: (
+                _log.warning("webview.start() did not return; forcing exit"),
+                _kill_webview2_processes(),
+                _os._exit(1),
+            ),
+        )
+        _t.daemon = True
+        _t.start()
 
     window.events.closing += _on_window_closing
 
@@ -251,30 +266,37 @@ def main() -> None:
     window.events.loaded += _on_loaded
 
     webview.start(debug="--debug" in sys.argv)
+    _log.info("webview.start() returned — exiting normally")
 
     # 7. Cleanup after window closes - MUST stay non-blocking.
-    #    window.closing already started shutdown on a background thread. If
-    #    closing did NOT fire (e.g. a post-run "exit app" action calls
+    #    window.closing already started shutdown on a background thread; if it
+    #    did not fire (e.g. a post-run "exit app" action called
     #    window.destroy(), which bypasses the closing event on some pywebview
-    #    versions), start shutdown async here too. Either way the main thread
-    #    must NOT wait on task_manager.shutdown() (it joins worker/auto-battle
-    #    threads and calls hotkey_listener.stop() with no timeout) - if it
-    #    blocks, os._exit(0) never runs and the WebView2 child processes
-    #    (msedgewebview2.exe) are orphaned as a lingering tray icon. Worker
-    #    subprocesses are reaped by the Job Object on process exit regardless,
-    #    so async cleanup is safe.
+    #    versions), start it async here. Never wait on task_manager.shutdown()
+    #    from the main thread (it joins worker/auto-battle threads and calls
+    #    hotkey_listener.stop() with no timeout). Worker subprocesses are
+    #    reaped by the Job Object on process exit regardless, so async cleanup
+    #    is safe.
     _start_shutdown_thread("post-webview.start")
     task_manager.disconnect()
 
-    # 8. Force-exit — kill stray WebView2 processes, then hard exit.
-    #    pywebview can leave msedgewebview2.exe alive (visible as tray icon).
-    _kill_webview2_processes()
-    import os as _os
-    _os._exit(0)
+    # 8. Do NOT os._exit() here. Hard-killing the process from a closing
+    #    thread races the window's WM_DESTROY and leaves a GHOST TASKBAR
+    #    BUTTON — no live process, but the button stays and cannot be closed.
+    #    Let the process exit naturally: all background threads are daemons,
+    #    so Python exits once main() returns, and the 15s fallback timer in
+    #    _on_window_closing covers a genuinely stuck webview.start().
 
 
 def _kill_webview2_processes() -> None:
-    """Terminate any leftover msedgewebview2.exe processes."""
+    """Terminate leftover msedgewebview2.exe processes.
+
+    ONLY intended for the stuck-webview.start() fallback (hard exit path in
+    ``_on_window_closing``). Do NOT call on every close: it taskkills ALL
+    WebView2 processes system-wide, including ones owned by SearchHost /
+    MSPCManager, disrupting unrelated system UI. On a normal close the
+    WebView2 children die with the parent process on their own.
+    """
     import subprocess
     import sys as _sys
     if _sys.platform != "win32":
