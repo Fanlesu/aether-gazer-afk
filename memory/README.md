@@ -34,6 +34,10 @@ Stores structured notes about project decisions, architecture, lessons learned, 
 | `18-virtual-desktop-background.md` | Virtual desktop background mode (abandoned) |
 | `19-duowei-runner-findings.md` | Multi-dimensional variable automation findings |
 | `20-local-vlm-feasibility.md` | Local VLM feasibility study (not recommended) |
+| `21-theme-system.md` | Theme system |
+| `22-combo-recording.md` | Combo recording |
+| `23-honest-reporting-robustness-fixes.md` | P1-P5: 假成功上报 + 分辨率 + OCR 性能 + 定时任务 + 测试 |
+| `24-tray-icon-ghost-button.md` | Tray icon 幽灵按钮残留诊断与优雅退出修复 |
 | `21-theme-system.md` | 12-theme CSS variable system |
 | `22-combo-recording.md` | Combo recording feature (F9/F11, pynput, compile to steps) |
 | `23-honest-reporting-robustness-fixes.md` | P1-P5 review fixes: honest reporting, resolution robustness, OCR perf, dead code, tests |
