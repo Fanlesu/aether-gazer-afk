@@ -128,6 +128,56 @@ def test_buy_intel_fails_when_nav_fails():
     assert "navigate" in result.message.lower() or "daily" in result.message.lower()
 
 
+def test_buy_intel_skips_badge_exchange_without_red_dot():
+    """No red dot on the intel-badge sidebar entry → Step 3 exchange skipped.
+
+    The buy loop (Step 2) still runs, so the task succeeds; only the
+    intel badge exchange sub-step is skipped.
+    """
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+
+    exchange = AsyncMock(return_value="exchanged")
+    with (
+        patch.object(
+            BuyIntelShards, "_navigate_to_daily_purchase",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(BuyIntelShards, "_buy_loop", new=AsyncMock(return_value=3)),
+        patch.object(BuyIntelShards, "_exchange_intel_badge", new=exchange),
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        _patch_red_dot(False),
+    ):
+        result = _run(BuyIntelShards().execute(ctx))
+
+    exchange.assert_not_called()
+    assert result.status == "success"
+    assert result.data["purchased"] == 3
+
+
+def test_buy_intel_exchanges_badge_with_red_dot():
+    """Red dot present → Step 3 intel badge exchange is attempted."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+
+    exchange = AsyncMock(return_value="exchanged")
+    with (
+        patch.object(
+            BuyIntelShards, "_navigate_to_daily_purchase",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(BuyIntelShards, "_buy_loop", new=AsyncMock(return_value=2)),
+        patch.object(BuyIntelShards, "_exchange_intel_badge", new=exchange),
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        _patch_red_dot(True),
+    ):
+        result = _run(BuyIntelShards().execute(ctx))
+
+    exchange.assert_called_once()
+    assert result.status == "success"
+    assert result.data["purchased"] == 2
+
+
 # -- ClaimFreeStamina -- metadata --
 
 def test_claim_free_stamina_name():
@@ -174,7 +224,7 @@ def test_claim_free_stamina_fails_when_nav_fails():
 def test_claim_free_stamina_skips_when_cooldown():
     """ClaimFreeStamina returns skipped when cooldown is active.
 
-    The task navigates to daily supply, then checks OCR:
+    The red-dot gate (Step 2) is stubbed present so navigation proceeds:
     - FindTextCheck("免费") -> not found (ocr_find returns None)
     - HasTextCheck("冷却") -> found (ocr_find returns TextResult)
     -> returns "skipped" with cooldown message
@@ -222,11 +272,35 @@ def test_claim_free_stamina_skips_when_cooldown():
     ), patch(
         _OCR_FIND,
         side_effect=mock_ocr_find,
-    ):
+    ), _patch_red_dot(True):
         result = _run(ClaimFreeStamina().execute(ctx))
 
     assert result.status == "skipped"
     assert "cooldown" in result.message.lower()
+
+
+def test_claim_free_stamina_skips_without_supply_red_dot():
+    """No red dot on the supply-area entry → skip before 补给区 navigation.
+
+    RedDotCheck stubbed absent: the task reaches the shop page, fails the
+    gate, returns to hub, and reports skipped without touching the claim or
+    cooldown logic.
+    """
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+
+    return_hub = AsyncMock(return_value=OpResult(success=True))
+    with (
+        patch(_RETURN_TO_HUB_RUN, return_hub),
+        patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch(_IS_ON_PAGE, return_value=True),
+        _patch_red_dot(False),
+    ):
+        result = _run(ClaimFreeStamina().execute(ctx))
+
+    return_hub.assert_called()  # returned to hub before exiting
+    assert result.status == "skipped"
+    assert "red dot" in result.message.lower()
 
 
 # -- ClaimDailyStaminaPacks --

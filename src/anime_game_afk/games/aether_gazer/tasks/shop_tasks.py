@@ -93,6 +93,10 @@ class BuyIntelShards:
     # Purchase popup buttons (verified 2026-04-06 via OCR, 1067,624 / 1236,625 @ 1600x900)
     _MAX_BTN_X, _MAX_BTN_Y = 0.667, 0.693    # 最大 button
     _BUY_BTN_X, _BUY_BTN_Y = 0.773, 0.694    # 购买 button
+    # Intel-badge exchange red dot on the 交易中心/情报兑换 sidebar entry
+    # (verified 2026-04-06 @ 1600x900). Gates Step 3 (badge exchange):
+    # only attempt the exchange when this dot is present.
+    _INTEL_BADGE_RED_DOT = (0.056, 0.256)
 
     async def can_run(self, ctx: TaskContext) -> bool:
         """Always runnable — actual availability checked during execute."""
@@ -119,17 +123,31 @@ class BuyIntelShards:
         purchased = await self._buy_loop(ctx, run_log)
         ctx.logger.info(f"[Step 2] Done: purchased {purchased} intel shards")
 
-        # ── Step 3: Exchange intel badge ──
-        ctx.logger.info("[Step 3] Exchange intel badge")
-        try:
-            badge_result = await self._exchange_intel_badge(ctx, run_log)
+        # ── Step 3: Exchange intel badge (gated on red dot) ──
+        # The red dot at _INTEL_BADGE_RED_DOT marks a pending 情报徽章兑换
+        # on the 交易中心/情报兑换 sidebar entry. Only attempt the exchange
+        # when the dot is present; otherwise skip this sub-step. The Step 2
+        # buy loop already ran, so the task still succeeds when we skip.
+        ctx.logger.info("[Step 3] Check red dot before intel badge exchange")
+        shot = await ScreenshotOp().run(ctx)
+        badge_dot = await RedDotCheck(
+            *self._INTEL_BADGE_RED_DOT, label="intel_badge", image=shot.data,
+        ).evaluate(ctx)
+        if not badge_dot.passed:
             ctx.logger.info(
-                f"[Step 3] Intel badge exchange: {badge_result}"
+                "=== BuyIntelShards: skipped intel badge exchange — no red dot ==="
             )
-        except Exception as exc:
-            ctx.logger.warning(
-                f"[Step 3] Intel badge exchange failed (non-fatal): {exc}"
-            )
+        else:
+            ctx.logger.info("[Step 3] Exchange intel badge")
+            try:
+                badge_result = await self._exchange_intel_badge(ctx, run_log)
+                ctx.logger.info(
+                    f"[Step 3] Intel badge exchange: {badge_result}"
+                )
+            except Exception as exc:
+                ctx.logger.warning(
+                    f"[Step 3] Intel badge exchange failed (non-fatal): {exc}"
+                )
 
         # ── Step 4: Return to hub ──
         ctx.logger.info("[Step 4] Returning to hub")
@@ -497,6 +515,10 @@ class ClaimFreeStamina:
     requires_ocr = True
     safe = True  # Free item, no currency spent
 
+    # Red dot marking a pending free-stamina claim on the shop's
+    # supply-area entry. Gated before the 补给区 navigation step.
+    _SUPPLY_RED_DOT = (0.386, 0.801)
+
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
 
@@ -505,18 +527,52 @@ class ClaimFreeStamina:
 
         ctx.logger.info("=== ClaimFreeStamina: starting ===")
 
-        # ── Step 1: Navigate to daily supply page ──
-        ctx.logger.info("[Step 1] Navigate to daily supply page")
-        nav_ok = await self._navigate_to_daily_supply(ctx, run_log)
+        # ── Step 1: Navigate hub → shop ──
+        ctx.logger.info("[Step 1] Navigate to shop")
+        shop_ok = await self._navigate_to_shop(ctx, run_log)
+        if not shop_ok:
+            ctx.logger.error("[Step 1] FAILED: cannot reach shop")
+            return TaskResult(
+                status="failed",
+                message="Cannot navigate to shop",
+            )
+
+        # ── Step 2: Red-dot gate on the supply-area entry ──
+        # The red dot at _SUPPLY_RED_DOT marks a pending free-stamina claim.
+        # If absent, there's nothing to claim — return to hub and skip the
+        # rest of the task rather than navigating into the paid supply area.
+        ctx.logger.info("[Step 2] Check red dot on supply-area entry")
+        shot = await ScreenshotOp().run(ctx)
+        dot_check = await RedDotCheck(
+            *self._SUPPLY_RED_DOT, label="supply_area", image=shot.data,
+        ).evaluate(ctx)
+        has_dot = dot_check.passed
+        ctx.logger.info(
+            f"[Step 2] Red dot on supply-area entry: {has_dot} "
+            f"(ratio={dot_check.data:.3f})"
+        )
+        if not has_dot:
+            ctx.logger.info(
+                "=== ClaimFreeStamina: skipped — no red dot on supply area ==="
+            )
+            await ReturnToHubAction().run(ctx)
+            return TaskResult(
+                status="skipped",
+                message="No red dot on supply-area entry",
+            )
+
+        # ── Step 3: Navigate shop → daily supply page ──
+        ctx.logger.info("[Step 3] Navigate to daily supply page")
+        nav_ok = await self._navigate_from_shop_to_daily_supply(ctx, run_log)
         if not nav_ok:
-            ctx.logger.error("[Step 1] FAILED: cannot reach daily supply")
+            ctx.logger.error("[Step 3] FAILED: cannot reach daily supply")
             return TaskResult(
                 status="failed",
                 message="Cannot navigate to daily supply page",
             )
 
-        # ── Step 2: Check if free stamina is available ──
-        ctx.logger.info("[Step 2] Check free stamina availability")
+        # ── Step 4: Check if free stamina is available ──
+        ctx.logger.info("[Step 4] Check free stamina availability")
         r = await ScreenshotOp().run(ctx)
         if run_log:
             run_log.save_image(r.data, "stamina_daily_supply_check")
@@ -537,7 +593,7 @@ class ClaimFreeStamina:
                     message="Free stamina already claimed (cooldown)",
                 )
             ctx.logger.warning(
-                "[Step 2] Neither '免费' nor '冷却' found — page may be wrong"
+                "[Step 4] Neither '免费' nor '冷却' found — page may be wrong"
             )
             # Return to hub before exiting
             await ReturnToHubAction().run(ctx)
@@ -548,19 +604,19 @@ class ClaimFreeStamina:
 
         free_label = free_result.data
         ctx.logger.info(
-            f"[Step 2] Free stamina available at "
+            f"[Step 4] Free stamina available at "
             f"({free_label.region.x},{free_label.region.y}) "
             f"conf={free_label.confidence:.2f}"
         )
 
-        # ── Step 3: Click to claim ──
-        ctx.logger.info("[Step 3] Clicking free stamina item")
+        # ── Step 5: Click to claim ──
+        ctx.logger.info("[Step 5] Clicking free stamina item")
         # Click the free label area (the item card is near the text)
         fx = free_label.region.x + free_label.region.w // 2
         fy = free_label.region.y + free_label.region.h // 2
         await ClickPxOp(px=fx, py=fy, wait=1.5).run(ctx)
 
-        # ── Step 4: Verify and confirm popup ──
+        # ── Step 6: Verify and confirm popup ──
         r = await ScreenshotOp().run(ctx)
         if run_log:
             run_log.save_image(r.data, "stamina_claim_popup")
@@ -573,7 +629,7 @@ class ClaimFreeStamina:
         if not confirm_result.passed:
             # Try just pressing Enter (common confirm key)
             ctx.logger.warning(
-                "[Step 4] No confirm button found via OCR, trying Enter key"
+                "[Step 6] No confirm button found via OCR, trying Enter key"
             )
             await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
         else:
@@ -581,21 +637,21 @@ class ClaimFreeStamina:
             cx = confirm_btn.region.x + confirm_btn.region.w // 2
             cy = confirm_btn.region.y + confirm_btn.region.h // 2
             ctx.logger.info(
-                f"[Step 4] Clicking confirm at ({cx},{cy})"
+                f"[Step 6] Clicking confirm at ({cx},{cy})"
             )
             await ClickPxOp(px=cx, py=cy, wait=1.5).run(ctx)
 
         # Dismiss any result popup
-        ctx.logger.info("[Step 4] Dismissing result popup")
+        ctx.logger.info("[Step 6] Dismissing result popup")
         await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
 
         if run_log:
             run_log.snap(ctx.device, "stamina_after_claim")
 
-        # ── Step 5: IMMEDIATELY return to hub ──
+        # ── Step 7: IMMEDIATELY return to hub ──
         # CRITICAL: The shop supply area contains paid gift packages.
         # Do NOT linger on any shop page — go straight to hub.
-        ctx.logger.info("[Step 5] Immediately return to hub (safety)")
+        ctx.logger.info("[Step 7] Immediately return to hub (safety)")
         await ReturnToHubAction().run(ctx)
         if run_log:
             run_log.snap(ctx.device, "stamina_safe_hub")
@@ -610,12 +666,14 @@ class ClaimFreeStamina:
     # Navigation
     # ------------------------------------------------------------------
 
-    async def _navigate_to_daily_supply(
+    async def _navigate_to_shop(
         self, ctx: TaskContext, run_log: RunLog | None,
     ) -> bool:
-        """Navigate from hub to daily supply page.
+        """Navigate from hub to the shop page.
 
-        Uses direct clicks with is_on_page verification.
+        Wake UI, return to hub, then click the shop entry (with retry).
+        Reaching the shop page is where the red-dot gate (execute Step 2)
+        runs — the supply-area red dot is only visible on this page.
         """
         # Wake + hub
         ctx.logger.info("  nav: wake UI + return to hub")
@@ -653,6 +711,16 @@ class ClaimFreeStamina:
         if run_log:
             run_log.snap(ctx.device, "stamina_at_shop")
 
+        return True
+
+    async def _navigate_from_shop_to_daily_supply(
+        self, ctx: TaskContext, run_log: RunLog | None,
+    ) -> bool:
+        """From the shop page, open the supply area and the daily-supply tab.
+
+        Called only after the red-dot gate (execute Step 2) has confirmed a
+        pending claim, i.e. this is the 补给区 navigation step and beyond.
+        """
         # Shop → supply area (click 补给区 button at 399,816)
         ctx.logger.info("  nav: shop -> supply area (click 0.249,0.907)")
         await ClickOp(x=0.249, y=0.907, wait=0.5).run(ctx)

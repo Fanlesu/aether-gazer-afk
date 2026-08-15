@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
+from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
@@ -15,6 +16,7 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
     ClickPxOp,
     PressKeyOp,
+    ScreenshotOp,
     SleepOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
@@ -27,6 +29,9 @@ _AMUSEMENT_X, _AMUSEMENT_Y = 0.786, 0.944      # Hub bottom bar 游园街 (1257,
 _PANEL_X, _PANEL_Y = 0.775, 0.956               # 游园街面板 button (1240,860 @ 1600x900)
 _AUTO_PLACE_X, _AUTO_PLACE_Y = 0.678, 0.918     # 自动放置 button (1084,826 @ 1600x900)
 _FEED_X, _FEED_Y = 0.855, 0.918                 # 一键投喂 button (1368,826 @ 1600x900)
+
+# Red-dot gate (verify per resolution with coord picker)
+_PARK_TASK_RED_DOT_X, _PARK_TASK_RED_DOT_Y = 0.682, 0.898  # 游园任务 claimable indicator
 
 
 class AmusementStreetDaily:
@@ -42,6 +47,7 @@ class AmusementStreetDaily:
     - Fixed coord: 游园街, 游园街面板, 自动放置, 一键投喂
     - OCR: 领取收益, 派遣完成/可委托, 一键派遣, 游园任务, 一键领取
     - Keyboard: Enter (confirm), ESC (close panels)
+    - Red dot: 游园任务 entry claimable indicator (gates the park-task claim)
     """
 
     name = "amusement_street_daily"
@@ -198,27 +204,44 @@ class AmusementStreetDaily:
         ctx.logger.info("[Step 8] ESC to street → click 游园任务 → claim rewards")
         await PressKeyOp(key=VK_ESCAPE, wait=1.5).run(ctx)
 
-        # Fixed coord: 游园任务 button on street bottom bar (0.621, 0.944)
-        _PARK_TASK_X, _PARK_TASK_Y = 0.621, 0.944
-        ctx.logger.info(
-            f"  clicking 游园任务 at ({_PARK_TASK_X},{_PARK_TASK_Y})"
-        )
-        await ClickOp(x=_PARK_TASK_X, y=_PARK_TASK_Y, wait=1.5).run(ctx)
+        # ── Red-dot gate: 游园任务 ──
+        # Only proceed with the park-task claim if its entry shows a red dot
+        # (claimable indicator); otherwise skip the whole block.
+        ctx.logger.info("[Step 8] Check red dot on 游园任务 entry")
+        shot = await ScreenshotOp().run(ctx)
+        park_dot = await RedDotCheck(
+            _PARK_TASK_RED_DOT_X, _PARK_TASK_RED_DOT_Y,
+            label="park_task", image=shot.data,
+        ).evaluate(ctx)
+        park_task_claimed = False
+        if not park_dot.passed:
+            ctx.logger.info(
+                "  no red dot on 游园任务 entry — skip park task claim"
+            )
+        else:
+            # Fixed coord: 游园任务 button on street bottom bar (0.621, 0.944)
+            _PARK_TASK_X, _PARK_TASK_Y = 0.621, 0.944
+            ctx.logger.info(
+                f"  clicking 游园任务 at ({_PARK_TASK_X},{_PARK_TASK_Y})"
+            )
+            await ClickOp(x=_PARK_TASK_X, y=_PARK_TASK_Y, wait=1.5).run(ctx)
 
-        # Click 一键领取 at fixed coord (verified from 21_amusement screenshot)
-        # OCR was unreliable for this button; use fixed position as primary
-        _PARK_CLAIM_X, _PARK_CLAIM_Y = 0.713, 0.843
-        ctx.logger.info(
-            f"  clicking 一键领取 at ({_PARK_CLAIM_X},{_PARK_CLAIM_Y})"
-        )
-        await ClickOp(x=_PARK_CLAIM_X, y=_PARK_CLAIM_Y, wait=1.0).run(ctx)
+            # Click 一键领取 at fixed coord (verified from 21_amusement screenshot)
+            # OCR was unreliable for this button; use fixed position as primary
+            _PARK_CLAIM_X, _PARK_CLAIM_Y = 0.713, 0.843
+            ctx.logger.info(
+                f"  clicking 一键领取 at ({_PARK_CLAIM_X},{_PARK_CLAIM_Y})"
+            )
+            await ClickOp(x=_PARK_CLAIM_X, y=_PARK_CLAIM_Y, wait=1.0).run(ctx)
 
-        # Dismiss popups: Enter ×3
-        for _ in range(3):
-            await PressKeyOp(key=VK_ENTER, wait=0.5).run(ctx)
-        # Click top-center ×2 to dismiss remaining overlays
-        await ClickOp(x=0.5, y=0.005, wait=0.5).run(ctx)
-        await ClickOp(x=0.5, y=0.005, wait=0.5).run(ctx)
+            # Dismiss popups: Enter ×3
+            for _ in range(3):
+                await PressKeyOp(key=VK_ENTER, wait=0.5).run(ctx)
+            # Click top-center ×2 to dismiss remaining overlays
+            await ClickOp(x=0.5, y=0.005, wait=0.5).run(ctx)
+            await ClickOp(x=0.5, y=0.005, wait=0.5).run(ctx)
+            park_task_claimed = True
+
         if run_log:
             run_log.snap(ctx.device, "amusement_after_park_tasks")
 
@@ -232,7 +255,10 @@ class AmusementStreetDaily:
         ctx.logger.info("=== AmusementStreetDaily: complete ===")
         return TaskResult(
             status="success",
-            data={"task": "amusement_street"},
+            data={
+                "task": "amusement_street",
+                "park_task_claimed": park_task_claimed,
+            },
         )
 
     # ------------------------------------------------------------------

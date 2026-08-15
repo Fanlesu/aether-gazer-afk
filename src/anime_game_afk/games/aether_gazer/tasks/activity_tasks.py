@@ -19,6 +19,7 @@ from anime_game_afk.games.aether_gazer.checks.ocr import (
     ocr_scan_with_retry,
 )
 from anime_game_afk.games.aether_gazer.checks.page import OnPageCheck
+from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
@@ -84,6 +85,9 @@ class JointDefenseSweep:
     _MAX_SCROLL_ATTEMPTS = 5
     _OCR_RETRIES = 2
     _OCR_RETRY_DELAY = 1.5
+    # Reward-entry red dot on the 联防协议 detail page (the page just before
+    # returning to hub). Gate the 一键领取 reward-claim on its presence.
+    _REWARD_RED_DOT_X, _REWARD_RED_DOT_Y = 0.058, 0.540
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
@@ -612,6 +616,24 @@ class JointDefenseSweep:
             ctx.logger.warning(
                 "  rewards: could not reach 联防协议 detail page"
             )
+            return
+
+        # ── Red-dot gate on the reward entry ──
+        # The 联防协议 detail page is the page immediately before returning to
+        # hub. Only claim rewards when the entry shows a red dot; otherwise
+        # skip this step (the caller still returns to hub afterwards).
+        shot = await ScreenshotOp().run(ctx)
+        dot_check = await RedDotCheck(
+            self._REWARD_RED_DOT_X, self._REWARD_RED_DOT_Y,
+            label="jd_reward", image=shot.data,
+        ).evaluate(ctx)
+        has_dot = dot_check.passed
+        ctx.logger.info(
+            f"  rewards: red dot on reward entry: {has_dot} "
+            f"(ratio={dot_check.data:.3f})"
+        )
+        if not has_dot:
+            ctx.logger.info("  rewards: no red dot — skipping reward claim")
             return
 
         # Click bottom-most reward claim button (right side of task list)
