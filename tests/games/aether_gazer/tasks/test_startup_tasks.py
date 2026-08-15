@@ -309,6 +309,68 @@ class TestSkipStartupPopups:
         # Simplified: clicks (0.157, 0.59) for idle screen too
         assert (0.157, 0.59) in device.click_log
 
+    def _patch_rapid_click(self):
+        """Patch RapidClickAction with a factory returning a runnable stub.
+
+        Returns (fake_cls, fake_instance) so the caller can assert both the
+        construction kwargs (center coords / times) and whether it ran.
+        """
+        instance = MagicMock()
+        instance.run = AsyncMock()
+        cls = MagicMock(return_value=instance)
+        return cls, instance
+
+    def test_triggers_corrector_interaction_on_success(self):
+        """After hub is confirmed, click screen center 3x to open 修正者 dialogue."""
+        device = MockDevice()
+        ctx = TaskContext(device=device)
+        task = SkipStartupPopups(max_attempts=5)
+
+        fake_cls, fake_inst = self._patch_rapid_click()
+        with patch(_PAGE_IS_ON_PAGE, return_value=True), \
+             patch(_OCR_OCR_ONCE, return_value=_make_hub_ocr()), \
+             patch(_PAGE_OCR_ONCE, return_value=_make_hub_ocr()), \
+             patch(
+                "anime_game_afk.games.aether_gazer.tasks.startup_tasks.RapidClickAction",
+                fake_cls,
+            ):
+            result = _run(task.execute(ctx))
+
+        assert result.status == "success"
+        fake_cls.assert_called_once()
+        kw = fake_cls.call_args.kwargs
+        assert kw["x"] == 0.5
+        assert kw["y"] == 0.5
+        assert kw["times"] == 3
+        fake_inst.run.assert_awaited_once()
+
+    def test_no_corrector_interaction_on_failure(self):
+        """If hub is never reached, the center-click interaction must not run."""
+        device = MockDevice()
+        ctx = TaskContext(device=device)
+        task = SkipStartupPopups(max_attempts=2)
+
+        fake_cls, fake_inst = self._patch_rapid_click()
+        with patch(_PAGE_IS_ON_PAGE, return_value=False), \
+             patch(_PAGE_OCR_ONCE, return_value=_make_empty_ocr()), \
+             patch(_OCR_OCR_ONCE, return_value=_make_empty_ocr()), \
+             patch(
+                "anime_game_afk.games.aether_gazer.tasks.startup_tasks.RapidClickAction",
+                fake_cls,
+            ):
+            result = _run(task.execute(ctx))
+
+        assert result.status == "failed"
+        # The dismiss path also calls RapidClickAction (x=0.157, times=5);
+        # only the center-click interaction (x=0.5, y=0.5, times=3) must be absent.
+        center_calls = [
+            c for c in fake_cls.call_args_list
+            if c.kwargs.get("x") == 0.5
+            and c.kwargs.get("y") == 0.5
+            and c.kwargs.get("times") == 3
+        ]
+        assert center_calls == []
+
 
 # -- LaunchAndReachHub Tests --
 

@@ -83,6 +83,7 @@ class SkipStartupPopups:
                             f"  [startup] Hub confirmed after {attempt} attempts"
                         )
                         ctx.logger.info("=== SkipStartupPopups: completed successfully ===")
+                        await self._trigger_corrector_interaction(ctx)
                         return TaskResult(
                             status="success",
                             message=f"Hub reached after {attempt} attempts",
@@ -110,6 +111,7 @@ class SkipStartupPopups:
             hub_result = await AtHubCheck().evaluate(ctx)
             if hub_result.passed:
                 ctx.logger.info("=== SkipStartupPopups: completed (final check) ===")
+                await self._trigger_corrector_interaction(ctx)
                 return TaskResult(status="success", message="Hub found at final check")
 
             ctx.logger.error("=== SkipStartupPopups: failed — hub not reached ===")
@@ -120,6 +122,20 @@ class SkipStartupPopups:
         except Exception as exc:
             ctx.logger.error(f"=== SkipStartupPopups: failed — {exc} ===")
             raise
+
+    async def _trigger_corrector_interaction(self, ctx: TaskContext) -> None:
+        """Click the screen center three times to trigger 修正者 interaction.
+
+        Per user request, appended to the end of the startup task (after the
+        hub is confirmed reached) to open the 修正者 (Corrector) dialogue.
+        Center is (0.5, 0.5) in fractional coords (resolution-independent).
+        """
+        ctx.logger.info(
+            "  [startup] triggering 修正者 interaction (3x center click)"
+        )
+        await RapidClickAction(
+            x=0.5, y=0.5, times=3, interval=0.15,
+        ).run(ctx)
 
 
 class LaunchAndReachHub:
