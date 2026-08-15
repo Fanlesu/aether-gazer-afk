@@ -5,8 +5,8 @@ from anime_game_afk.runtime.config import ConfigStore
 from anime_game_afk.runtime.errors import FallbackStrategy, RecoveryStrategy, RetryStrategy
 from anime_game_afk.runtime.events import (
     DEVICE_DISCONNECTED,
-    SESSION_EXPIRED,
     SCREENSHOT_TIMEOUT,
+    SESSION_EXPIRED,
     UNHANDLED_EXCEPTION,
     WINDOW_LOST,
     EventBus,

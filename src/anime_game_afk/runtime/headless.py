@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-import sys
 import time
-import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -68,13 +66,15 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
     exe_path = user_cfg.game_exe_path(game_id)
 
     if not exe_path or not Path(exe_path).exists():
-        result = find_aether_gazer(search_drives=user_cfg.search_drives())
-        if result.get("game_exe"):
-            user_cfg.set_game_exe_path(game_id, result["game_exe"])
-            if result.get("launcher"):
-                user_cfg.set_launcher_path(game_id, result["launcher"])
+        found = find_aether_gazer(search_drives=user_cfg.search_drives())
+        game_exe = found.get("game_exe")
+        launcher = found.get("launcher")
+        if game_exe:
+            user_cfg.set_game_exe_path(game_id, game_exe)
+            if launcher:
+                user_cfg.set_launcher_path(game_id, launcher)
             user_cfg.save()
-            exe_path = result["game_exe"]
+            exe_path = game_exe
 
     # --- Ensure game is running ---
     game_was_launched = False

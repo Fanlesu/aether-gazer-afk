@@ -12,7 +12,6 @@ import subprocess
 import time
 from pathlib import Path
 
-from anime_game_afk.core.errors import GameNotRunningError
 from anime_game_afk.runtime.logger import get_logger
 
 logger = get_logger("core.game_launcher")

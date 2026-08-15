@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import time
 
+from anime_game_afk.config.user_config import UserConfig
 from anime_game_afk.games.aether_gazer.knowledge.keys import (
-    VK_ENTER, letter_to_vk,
+    VK_ENTER,
+    letter_to_vk,
 )
 from anime_game_afk.games.aether_gazer.ops.primitives import (
-    ClickOp, ClickPxOp, PressKeyOp, SleepOp,
+    ClickOp,
+    ClickPxOp,
+    PressKeyOp,
+    SleepOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
-from anime_game_afk.config.user_config import UserConfig
 from anime_game_afk.vision.ocr import ocr_once
 
 # Fixed coordinates (fractional 0.0-1.0)

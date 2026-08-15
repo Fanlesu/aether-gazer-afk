@@ -25,17 +25,15 @@ import numpy as np
 from loguru import logger as _loguru
 
 from anime_game_afk.core.types import Rect
-from anime_game_afk.vision.io import imread
-from anime_game_afk.vision.matcher import match_template
 from anime_game_afk.games.aether_gazer.knowledge.constants import (
     MATCH_THRESHOLD,
 )
 from anime_game_afk.games.aether_gazer.knowledge.resources import (
     ASSETS_ROOT,
-    TEMPLATE_DIR,
     TEMPLATE_INDEX,
 )
-
+from anime_game_afk.vision.io import imread
+from anime_game_afk.vision.matcher import match_template
 
 # Module-level template cache (loaded once, reused)
 _page_templates: dict[str, list[dict]] | None = None

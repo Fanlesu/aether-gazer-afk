@@ -238,7 +238,7 @@ class InputGuard:
         """True when the guard thread is running and the hook is installed."""
         return self._thread is not None and self._hook is not None
 
-    def locked(self) -> "_LockedContext":
+    def locked(self) -> _LockedContext:
         """Context manager: lock for the body, unlock on exit."""
         return _LockedContext(self)
 

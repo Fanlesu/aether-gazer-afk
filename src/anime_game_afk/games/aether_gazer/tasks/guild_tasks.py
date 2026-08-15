@@ -14,7 +14,6 @@ from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
 from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
     PressKeyOp,
-    SleepOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
 

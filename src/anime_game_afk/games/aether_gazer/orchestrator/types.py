@@ -101,7 +101,7 @@ def _parse_process_def(raw: dict[str, Any]) -> ProcessDef:
     return proc
 
 
-def load_plan(source: "str | Path | dict[str, Any]") -> PlanConfig:
+def load_plan(source: str | Path | dict[str, Any]) -> PlanConfig:
     """Load a pipeline plan from a YAML file path or a pre-parsed dict.
 
     Args:
@@ -127,7 +127,7 @@ def load_plan(source: "str | Path | dict[str, Any]") -> PlanConfig:
             raise FileNotFoundError(f"Plan file not found: {path}")
         logger.info("Loading plan from {path}", path=str(path))
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
         except yaml.YAMLError as exc:
             raise ValueError(f"Invalid YAML in plan file {path}: {exc}") from exc

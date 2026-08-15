@@ -14,8 +14,15 @@ Camera rotation uses fractional swipe (0.0–1.0) for resolution independence.
 """
 from __future__ import annotations
 
+from anime_game_afk.games.aether_gazer.combat.script import load_script
+from anime_game_afk.games.aether_gazer.combat.service import AutoBattleService
 from anime_game_afk.games.aether_gazer.knowledge.keys import (
-    VK_ENTER, VK_ESCAPE, VK_J, VK_W, VK_H, VK_S,
+    VK_ENTER,
+    VK_ESCAPE,
+    VK_H,
+    VK_J,
+    VK_S,
+    VK_W,
 )
 from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
@@ -23,8 +30,6 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
 from anime_game_afk.games.aether_gazer.tasks.navigation_tasks import ReturnToHub
-from anime_game_afk.games.aether_gazer.combat.script import load_script
-from anime_game_afk.games.aether_gazer.combat.service import AutoBattleService
 from anime_game_afk.vision.ocr import ocr_once
 
 # ── Camera rotation (fractional, resolution-scaled) ──

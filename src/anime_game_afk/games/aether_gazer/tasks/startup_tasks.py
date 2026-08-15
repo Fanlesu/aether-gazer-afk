@@ -22,7 +22,6 @@ from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck, OnPageChec
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import RapidClickAction
 from anime_game_afk.games.aether_gazer.ops.primitives import (
-    ClickOp,
     PressKeyOp,
     SleepOp,
 )

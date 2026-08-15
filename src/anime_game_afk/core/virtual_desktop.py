@@ -17,7 +17,6 @@ import atexit
 import ctypes
 import ctypes.wintypes
 import time
-from typing import Callable
 
 from anime_game_afk.runtime.logger import get_logger
 

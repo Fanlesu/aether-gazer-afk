@@ -25,7 +25,6 @@ Usage::
 from __future__ import annotations
 
 import shutil
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -106,7 +105,7 @@ class RunLog:
 
     def snap(
         self,
-        device: "DeviceAdapter",
+        device: DeviceAdapter,
         label: str,
         *,
         full_size: bool = False,

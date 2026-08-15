@@ -7,12 +7,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Sequence
+from collections.abc import Sequence
 
 from loguru import logger
 
 from anime_game_afk.games.aether_gazer.combat.script import CombatScript, CombatStep
-from anime_game_afk.games.aether_gazer.knowledge.keys import key_name
 from anime_game_afk.games.aether_gazer.ops.base import OpContext
 
 

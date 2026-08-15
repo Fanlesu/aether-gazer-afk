@@ -14,13 +14,12 @@ import enum
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 from pynput import keyboard
-
-from anime_game_afk.games.aether_gazer.knowledge.keys import letter_to_vk
 
 # Keys the game uses (only record these)
 _GAME_KEYS = {

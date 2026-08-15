@@ -125,6 +125,9 @@ def main() -> None:
         height=600,
         min_size=(750, 500),
     )
+    if window is None:
+        _log.error("Failed to create pywebview window")
+        sys.exit(1)
 
     # 6. Bind window for evaluate_js push
     task_manager.bind_window(window)

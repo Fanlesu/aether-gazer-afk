@@ -5,7 +5,7 @@ CollectAllMail opens the mailbox and collects every available reward.
 from __future__ import annotations
 
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
-from anime_game_afk.games.aether_gazer.knowledge.keys import VK_H, VK_ENTER
+from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_H
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
 )

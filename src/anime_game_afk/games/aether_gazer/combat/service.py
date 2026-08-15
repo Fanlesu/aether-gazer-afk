@@ -28,8 +28,8 @@ from anime_game_afk.games.aether_gazer.combat.runner import (
     execute_startup,
 )
 from anime_game_afk.games.aether_gazer.combat.script import (
-    CombatScript,
     _CONFIG_DIR,
+    CombatScript,
     load_script_file,
 )
 from anime_game_afk.games.aether_gazer.ops.base import OpContext

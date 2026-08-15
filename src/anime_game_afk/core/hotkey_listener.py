@@ -26,11 +26,10 @@ from __future__ import annotations
 
 import ctypes
 import threading
+from collections.abc import Callable
 from ctypes import wintypes
-from typing import Callable
 
 from loguru import logger
-
 
 # ---------------------------------------------------------------------------
 # Win32 constants

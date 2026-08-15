@@ -108,7 +108,9 @@ class Api:
     def get_combat_script(self, script_id: str) -> dict[str, Any]:
         """Get full YAML content of a combat script."""
         from anime_game_afk.games.aether_gazer.combat.script import (
-            _CONFIG_DIR, load_script, validate_script_id,
+            _CONFIG_DIR,
+            load_script,
+            validate_script_id,
         )
         try:
             script_id = validate_script_id(script_id)
@@ -366,7 +368,7 @@ class Api:
     def set_hotkey(self, action: str, combo: str) -> dict[str, Any]:
         """Set a hotkey binding and reload the global listener."""
         from anime_game_afk.config.user_config import UserConfig
-        from anime_game_afk.core.hotkey_listener import parse_combo, format_combo
+        from anime_game_afk.core.hotkey_listener import format_combo, parse_combo
 
         allowed = {"toggle_auto_battle", "stop_all"}
         if action not in allowed:
@@ -388,7 +390,6 @@ class Api:
 
     def open_log_folder(self) -> dict[str, Any]:
         """Open the logs directory in the system file explorer."""
-        import os
         import subprocess
         from pathlib import Path
 
@@ -412,9 +413,9 @@ class Api:
         from anime_game_afk.runtime.scheduler import (
             WinScheduler,
             load_schedule_config,
+            reconstruct_config_from_task,
             save_schedule_config,
             schedule_config_exists,
-            reconstruct_config_from_task,
         )
         config = load_schedule_config()
         sched = WinScheduler()
@@ -467,7 +468,6 @@ class Api:
     def delete_schedule(self) -> dict[str, Any]:
         """Delete the scheduled task and disable config."""
         from anime_game_afk.runtime.scheduler import (
-            ScheduleConfig,
             WinScheduler,
             load_schedule_config,
             save_schedule_config,

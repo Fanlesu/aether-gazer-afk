@@ -18,22 +18,22 @@ from anime_game_afk.games.aether_gazer.checks.ocr import (
     HasTextCheck,
     OcrFullCheck,
 )
-from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck, OnPageCheck
+from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
-from anime_game_afk.games.aether_gazer.ops.perception.identify_page import is_on_page
-from anime_game_afk.vision.color import color_ratio
-from anime_game_afk.vision.ocr import ocr_full, ocr_once
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
+from anime_game_afk.games.aether_gazer.ops.perception.identify_page import is_on_page
 from anime_game_afk.games.aether_gazer.ops.primitives import (
-    ClickPxOp,
     ClickOp,
+    ClickPxOp,
     PressKeyOp,
     ScreenshotOp,
     SleepOp,
     SwipeOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
+from anime_game_afk.vision.color import color_ratio
+from anime_game_afk.vision.ocr import ocr_full, ocr_once
 
 if TYPE_CHECKING:
     from anime_game_afk.runtime.run_log import RunLog
@@ -609,7 +609,7 @@ class ClaimFreeStamina:
     # ------------------------------------------------------------------
 
     async def _navigate_to_daily_supply(
-        self, ctx: TaskContext, run_log: "RunLog | None",
+        self, ctx: TaskContext, run_log: RunLog | None,
     ) -> bool:
         """Navigate from hub to daily supply page.
 

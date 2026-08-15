@@ -16,7 +16,7 @@ OCR-verified coordinates (2026-04-19, 1280×720):
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from anime_game_afk.games.aether_gazer.checks.ocr import (
     OcrScan,
@@ -31,7 +31,6 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
     ClickPxOp,
     PressKeyOp,
-    ScreenshotOp,
     SleepOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult

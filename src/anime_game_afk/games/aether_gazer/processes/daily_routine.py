@@ -22,37 +22,36 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from anime_game_afk.games.aether_gazer.tasks.navigation_tasks import ReturnToHub
+from anime_game_afk.games.aether_gazer.processes.base import (
+    ProcessContext,
+    ProcessResult,
+)
+from anime_game_afk.games.aether_gazer.tasks.activity_tasks import (
+    JointDefenseSweep,
+)
+from anime_game_afk.games.aether_gazer.tasks.amusement_tasks import (
+    AmusementStreetDaily,
+)
+from anime_game_afk.games.aether_gazer.tasks.guild_tasks import GuildSupplyClaim
+from anime_game_afk.games.aether_gazer.tasks.keyin_tasks import (
+    JointSpecialOpsSweep,
+    MediumSeizureCombat,
+)
 from anime_game_afk.games.aether_gazer.tasks.mail_tasks import CollectAllMail
+from anime_game_afk.games.aether_gazer.tasks.navigation_tasks import ReturnToHub
+from anime_game_afk.games.aether_gazer.tasks.observation_tasks import (
+    DailyWeeklyMissionClaim,
+    MimiStationCollect,
+    TacticsTaskClaim,
+)
 from anime_game_afk.games.aether_gazer.tasks.shop_tasks import (
     BuyIntelShards,
     ClaimDailyStaminaPacks,
     ClaimFreeStamina,
 )
-from anime_game_afk.games.aether_gazer.tasks.observation_tasks import (
-    MimiStationCollect,
-    DailyWeeklyMissionClaim,
-    TacticsTaskClaim,
-)
-from anime_game_afk.games.aether_gazer.tasks.guild_tasks import GuildSupplyClaim
-from anime_game_afk.games.aether_gazer.tasks.amusement_tasks import (
-    AmusementStreetDaily,
-)
-from anime_game_afk.games.aether_gazer.tasks.activity_tasks import (
-    JointDefenseSweep,
-)
-from anime_game_afk.games.aether_gazer.tasks.keyin_tasks import (
-    MediumSeizureCombat,
-    JointSpecialOpsSweep,
-)
 from anime_game_afk.games.aether_gazer.tasks.startup_tasks import (
     SkipStartupPopups,
 )
-from anime_game_afk.games.aether_gazer.processes.base import (
-    ProcessContext,
-    ProcessResult,
-)
-
 
 # All daily tasks: (id, class, display_name, safe)
 _DAILY_TASKS: list[tuple[str, type, str, bool]] = [

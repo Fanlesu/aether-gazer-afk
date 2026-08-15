@@ -19,7 +19,6 @@ from anime_game_afk.games.aether_gazer.ops.perception.identify_page import (
 )
 from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
-    SleepOp,
 )
 
 

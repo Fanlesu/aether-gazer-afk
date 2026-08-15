@@ -28,8 +28,6 @@ from __future__ import annotations
 import asyncio
 import time
 
-import numpy as np
-
 from anime_game_afk.games.aether_gazer.ops.base import OpContext, OpResult
 
 

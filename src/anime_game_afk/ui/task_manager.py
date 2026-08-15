@@ -15,8 +15,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 # Imports from existing layers (L6, L3, L1) — UI only adds, never modifies
 from anime_game_afk.core.device import DeviceAdapter
 from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
@@ -137,7 +135,7 @@ class TaskManager:
         if not _CONFIG_PATH.exists():
             return
         try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             return
@@ -651,10 +649,11 @@ class TaskManager:
     def _auto_battle_worker(self) -> None:
         """Background thread: run AutoBattleService until stopped."""
         import asyncio
+
         from anime_game_afk.core.device import DeviceAdapter
-        from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
         from anime_game_afk.games.aether_gazer.combat.script import load_script
         from anime_game_afk.games.aether_gazer.combat.service import AutoBattleService
+        from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
         from anime_game_afk.games.aether_gazer.ops.base import OpContext
 
         device: DeviceAdapter | None = None
@@ -776,16 +775,17 @@ class TaskManager:
 
         try:
             import asyncio
-            from anime_game_afk.core.device import DeviceAdapter
-            from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
-            from anime_game_afk.games.aether_gazer.combat.script import (
-                load_script_from_string,
-            )
-            from anime_game_afk.games.aether_gazer.combat.runner import execute_steps
-            from anime_game_afk.games.aether_gazer.ops.base import OpContext
 
             # Build a minimal YAML from the steps to parse via existing loader
             import yaml
+
+            from anime_game_afk.core.device import DeviceAdapter
+            from anime_game_afk.games.aether_gazer.combat.runner import execute_steps
+            from anime_game_afk.games.aether_gazer.combat.script import (
+                load_script_from_string,
+            )
+            from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
+            from anime_game_afk.games.aether_gazer.ops.base import OpContext
             yaml_data = {
                 "name": "__test__",
                 "loop": steps_data if steps_data else [{"press": "j"}],
@@ -999,8 +999,9 @@ class TaskManager:
 
         # Log execution result
         try:
-            from anime_game_afk.runtime.scheduler import append_schedule_log
             from datetime import datetime
+
+            from anime_game_afk.runtime.scheduler import append_schedule_log
             elapsed = time.time() - self._start_time if self._start_time else 0
             append_schedule_log({
                 "timestamp": datetime.now().isoformat(),

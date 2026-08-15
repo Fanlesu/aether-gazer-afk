@@ -17,7 +17,6 @@ from typing import Any
 
 import yaml
 
-
 # Sentinel used internally so callers can store None as a valid value.
 _SENTINEL = object()
 
@@ -38,7 +37,7 @@ class ConfigStore:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "ConfigStore":
+    def from_yaml(cls, path: str | Path) -> ConfigStore:
         """Load configuration from a YAML file.
 
         Args:
@@ -56,7 +55,7 @@ class ConfigStore:
         return cls(data)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ConfigStore":
+    def from_dict(cls, data: dict[str, Any]) -> ConfigStore:
         """Create a ConfigStore from a plain dictionary.
 
         The dict is used directly (not deep-copied), so mutations via

@@ -13,13 +13,11 @@ Usage::
 """
 from __future__ import annotations
 
-import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-import sys
 
 from anime_game_afk.runtime.logger import get_logger
 
@@ -52,7 +50,7 @@ class UserConfig:
     # ------------------------------------------------------------------
 
     @classmethod
-    def load(cls, path: Path | str | None = None) -> "UserConfig":
+    def load(cls, path: Path | str | None = None) -> UserConfig:
         """Load user config from YAML file.
 
         If no file exists at *path*, creates one from the built-in

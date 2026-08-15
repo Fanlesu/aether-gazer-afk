@@ -99,7 +99,6 @@ async def _run(pipeline_id: str, enabled_ids: set[str]) -> int:
     # Late imports so the module can be parsed even if deps aren't installed.
     from anime_game_afk.config.user_config import UserConfig
     from anime_game_afk.core.device import DeviceAdapter
-    from anime_game_afk.core.errors import WindowNotFoundError
     from anime_game_afk.core.game_finder import find_aether_gazer
     from anime_game_afk.core.game_launcher import GameLauncher
     from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
@@ -145,13 +144,15 @@ async def _run(pipeline_id: str, enabled_ids: set[str]) -> int:
     exe_path = user_cfg.game_exe_path(game_id)
 
     if not exe_path or not __import__("pathlib").Path(exe_path).exists():
-        result = find_aether_gazer(search_drives=user_cfg.search_drives())
-        if result["game_exe"]:
-            user_cfg.set_game_exe_path(game_id, result["game_exe"])
-            if result.get("launcher"):
-                user_cfg.set_launcher_path(game_id, result["launcher"])
+        found = find_aether_gazer(search_drives=user_cfg.search_drives())
+        game_exe = found.get("game_exe")
+        launcher = found.get("launcher")
+        if game_exe:
+            user_cfg.set_game_exe_path(game_id, game_exe)
+            if launcher:
+                user_cfg.set_launcher_path(game_id, launcher)
             user_cfg.save()
-            exe_path = result["game_exe"]
+            exe_path = game_exe
 
     # ---- Ensure game is running ---------------------------------------------
     game_process_running = False

@@ -20,7 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +49,7 @@ class ScheduleConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ScheduleConfig":
+    def from_dict(cls, data: dict[str, Any]) -> ScheduleConfig:
         return cls(
             enabled=bool(data.get("enabled", False)),
             time=str(data.get("time", "04:00")),
@@ -155,7 +155,7 @@ def load_schedule_config() -> ScheduleConfig:
     if not path.exists():
         return ScheduleConfig()
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return ScheduleConfig.from_dict(data)
     except Exception as e:
@@ -193,7 +193,7 @@ def append_schedule_log(entry: dict[str, Any]) -> None:
     records: list[dict[str, Any]] = []
     if path.exists():
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 records = json.load(f)
         except Exception:
             records = []
@@ -212,7 +212,7 @@ def load_schedule_log() -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []

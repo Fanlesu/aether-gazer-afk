@@ -6,15 +6,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from anime_game_afk.core.types import Rect
-from anime_game_afk.games.aether_gazer.checks.ocr import FindAllTextCheck, FindTextCheck
+from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
 )
 from anime_game_afk.games.aether_gazer.ops.primitives import (
-    ClickPxOp,
     ClickOp,
+    ClickPxOp,
     PressKeyOp,
     SleepOp,
 )

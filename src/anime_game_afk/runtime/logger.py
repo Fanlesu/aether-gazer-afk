@@ -9,7 +9,7 @@ from typing import Any
 from loguru import logger as _loguru
 
 
-def get_logger(name: str) -> "Logger":
+def get_logger(name: str) -> Logger:
     """Get a structured logger with the given name."""
     return Logger(name)
 
@@ -56,7 +56,7 @@ class Logger:
     # Context management
     # ------------------------------------------------------------------
 
-    def with_context(self, **ctx: Any) -> "Logger":
+    def with_context(self, **ctx: Any) -> Logger:
         """Return a child logger with additional context merged in.
 
         The parent logger is unchanged; a new Logger instance is returned.

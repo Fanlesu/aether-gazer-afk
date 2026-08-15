@@ -9,7 +9,8 @@ Uses mixed identification methods:
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from anime_game_afk.core.types import Rect
 from anime_game_afk.games.aether_gazer.checks.ocr import (
@@ -22,8 +23,8 @@ from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
 from anime_game_afk.games.aether_gazer.ops.primitives import (
-    ClickPxOp,
     ClickOp,
+    ClickPxOp,
     PressKeyOp,
     ScreenshotOp,
     SleepOp,
