@@ -36,7 +36,17 @@ from loguru import logger as _loguru
 from anime_game_afk.vision.io import imwrite as _imwrite
 
 if TYPE_CHECKING:
-    from anime_game_afk.core.device import DeviceAdapter
+    from typing import Protocol
+
+    class _ScreenshotCapable(Protocol):
+        """Structural type for anything that can produce a screenshot.
+
+        ``snap`` only needs ``screenshot()``; this keeps ``RunLog`` (a generic
+        runtime-layer module) free of game-specific device imports while still
+        accepting both ``DeviceAdapter`` and the ops-layer ``DevicePort``.
+        """
+
+        def screenshot(self) -> np.ndarray: ...
 
 # Project root → logs/ directory
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -105,7 +115,7 @@ class RunLog:
 
     def snap(
         self,
-        device: DeviceAdapter,
+        device: _ScreenshotCapable,
         label: str,
         *,
         full_size: bool = False,
@@ -113,7 +123,7 @@ class RunLog:
         """Capture screenshot, save to run directory, return image.
 
         Args:
-            device: Device adapter to capture from.
+            device: Screenshot-capable device to capture from.
             label: Descriptive label (e.g. "hub_check", "popup_buy").
                    Used in filename: 001_hub_check.jpg
             full_size: If True, save at original resolution.
