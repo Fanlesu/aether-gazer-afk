@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from anime_game_afk.core.types import Rect
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
+from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_G, VK_T
 from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import (
     RapidClickAction,
@@ -23,7 +23,6 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     PressKeyOp,
     ScreenshotOp,
 )
-from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
 
 if TYPE_CHECKING:
@@ -40,7 +39,8 @@ _MIMI_CLAIM_X, _MIMI_CLAIM_Y = 0.753, 0.899
 _HUB_MISSION_RED_DOT = (0.828, 0.094)
 # Inside the daily/weekly panel, left sidebar tabs:
 _DAILY_TAB_RED_DOT = (0.058, 0.142)    # 日常任务 tab red dot
-_WEEKLY_TAB_RED_DOT = (0.058, 0.248)   # 周常任务 tab red dot (also the click target)
+_WEEKLY_TAB_RED_DOT = (0.058, 0.248)   # 周常任务 tab red dot (detection only)
+_WEEKLY_TAB_CLICK = (0.045, 0.281)     # 周常任务 tab 点击目标 (coord-picker @2560x1440)
 
 
 class MimiStationCollect:
@@ -114,7 +114,7 @@ class DailyWeeklyMissionClaim:
         -> skip entire task if absent
         -> G(daily/weekly panel)
         -> daily tab red dot (0.058, 0.142)?  -> OCR "一键领取" -> click
-        -> weekly tab red dot (0.058, 0.248)? -> click that dot to switch tab
+        -> weekly tab red dot (0.058, 0.248)? -> click weekly tab (0.045, 0.281)
                                               -> OCR "一键领取" -> click
         -> return to hub
 
@@ -199,13 +199,14 @@ class DailyWeeklyMissionClaim:
         else:
             ctx.logger.info("[Step 4] No daily red dot - skipped")
 
-        # Step 5: Switch to the weekly tab by clicking its red dot, then claim
+        # Step 5: Switch to the weekly tab by clicking the tab itself (the
+        # red dot is only a detector — clicking the dot misses the tab).
         if weekly_ratio > 0:
-            wx, wy = _WEEKLY_TAB_RED_DOT
+            cx, cy = _WEEKLY_TAB_CLICK
             ctx.logger.info(
-                f"[Step 5] Weekly tab has red dot - clicking ({wx}, {wy})"
+                f"[Step 5] Weekly tab red dot - clicking tab at ({cx}, {cy})"
             )
-            await ClickOp(x=wx, y=wy, wait=1.0).run(ctx)
+            await ClickOp(x=cx, y=cy, wait=1.0).run(ctx)
             if run_log:
                 run_log.snap(ctx.device, "mission_weekly_tab")
 
