@@ -22,6 +22,7 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickPxOp,
     PressKeyOp,
     ScreenshotOp,
+    SleepOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
 
@@ -41,6 +42,12 @@ _HUB_MISSION_RED_DOT = (0.828, 0.094)
 _DAILY_TAB_RED_DOT = (0.058, 0.142)    # 日常任务 tab red dot
 _WEEKLY_TAB_RED_DOT = (0.058, 0.248)   # 周常任务 tab red dot (detection only)
 _WEEKLY_TAB_CLICK = (0.045, 0.281)     # 周常任务 tab 点击目标 (coord-picker @2560x1440)
+# After the daily-claim reward animation the UI stutters; a single weekly-tab
+# click dispatched immediately is often swallowed, leaving us stuck on the
+# (already-claimed) daily pane. Stabilize first, then click the tab twice so a
+# missed first click is recovered by the second.
+_WEEKLY_TAB_STABILIZE = 1.5
+_WEEKLY_TAB_SETTLE = 0.6
 
 
 class MimiStationCollect:
@@ -204,8 +211,16 @@ class DailyWeeklyMissionClaim:
         if weekly_ratio > 0:
             cx, cy = _WEEKLY_TAB_CLICK
             ctx.logger.info(
-                f"[Step 5] Weekly tab red dot - clicking tab at ({cx}, {cy})"
+                f"[Step 5] Weekly tab red dot - switching to weekly tab at ({cx}, {cy})"
             )
+            # The daily-claim reward animation leaves the UI stuttering, so a
+            # single tab click dispatched immediately is often swallowed and
+            # the pane never switches. Stabilize first, then click the tab
+            # twice (settle between) so a missed first click is recovered by
+            # the second and we reliably land on the weekly pane.
+            await SleepOp(_WEEKLY_TAB_STABILIZE).run(ctx)
+            await ClickOp(x=cx, y=cy, wait=_WEEKLY_TAB_SETTLE).run(ctx)
+            await SleepOp(_WEEKLY_TAB_SETTLE).run(ctx)
             await ClickOp(x=cx, y=cy, wait=1.0).run(ctx)
             if run_log:
                 run_log.snap(ctx.device, "mission_weekly_tab")
@@ -274,20 +289,26 @@ class TacticsTaskClaim:
 
     _TACTICS_TASK_X, _TACTICS_TASK_Y = 0.101, 0.932
     _TACTICS_CLAIM_X, _TACTICS_CLAIM_Y = 0.925, 0.956
+    # Red dot on the 对策协议 hub icon (coord-picker 实测 @hub). Gate the
+    # whole task on it: no red dot ⇒ no pending rewards ⇒ skip.
+    _TACTICS_RED_DOT = (0.052, 0.153)
 
     async def can_run(self, ctx: TaskContext) -> bool:
-        ctx.logger.info("TacticsTaskClaim.can_run: OCR hub for '对策协议'…")
-        result = await FindTextCheck(target="对策协议").evaluate(ctx)
+        """Gate on the red dot on the 对策协议 hub icon.
+
+        The icon itself is always present, so an existence check (OCR
+        '对策协议') can't tell whether there are pending rewards. We instead
+        gate on the red dot — only run when one is visible.
+        """
+        ctx.logger.info("TacticsTaskClaim.can_run: red-dot check at hub")
+        check = await RedDotCheck(
+            *self._TACTICS_RED_DOT, label="tactics",
+        ).evaluate(ctx)
         ctx.logger.info(
-            f"TacticsTaskClaim.can_run: result.passed={result.passed} "
-            f"msg={result.message}"
+            f"TacticsTaskClaim.can_run: ratio={check.data:.3f} "
+            f"-> {'run' if check.passed else 'skip'}"
         )
-        if not result.passed:
-            ctx.logger.info(
-                "TacticsTaskClaim: '对策协议' not found on hub — skipping"
-            )
-            return False
-        return True
+        return check.passed
 
     async def execute(self, ctx: TaskContext) -> TaskResult:
         run_log: RunLog | None = getattr(ctx, "run_log", None)

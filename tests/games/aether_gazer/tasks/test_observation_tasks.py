@@ -135,6 +135,62 @@ def test_dw_execute_claims_daily_when_dot_present():
     assert result.data["claimed"] == 1
 
 
+def test_dw_execute_switches_weekly_tab_when_dot_present():
+    """Hub + daily + weekly dots all present → claim both, and the weekly tab
+    must be clicked (stabilize wait + double-click to survive UI stutter).
+
+    This guards the regression where, after the daily-claim reward animation,
+    the single weekly-tab click was swallowed by the stuttering UI and the
+    weekly reward was silently never claimed.
+    """
+    device = MockDevice()
+    ctx = _ctx(device)
+    # All three dots present: hub gate, daily tab, weekly tab.
+    ratios = {
+        "hub-mission": 0.3,
+        "daily-tab": 0.3,
+        "weekly-tab": 0.3,
+    }
+
+    async def fake_evaluate(self, ctx):
+        return CheckResult(
+            passed=ratios.get(self._label, 0.0) > 0,
+            data=ratios.get(self._label, 0.0),
+        )
+
+    from anime_game_afk.games.aether_gazer.tasks import observation_tasks
+    sleep = AsyncMock()
+    with (
+        patch.object(
+            observation_tasks.RedDotCheck, "evaluate",
+            new=fake_evaluate,
+        ),
+        patch.object(
+            DailyWeeklyMissionClaim, "_claim_section", _claim_patch(True),
+        ),
+        patch(
+            "anime_game_afk.games.aether_gazer.ops.navigate.smart_return"
+            ".ReturnToHubAction.run",
+            AsyncMock(),
+        ),
+        patch.object(observation_tasks.SleepOp, "run", sleep),
+    ):
+        result = _run(DailyWeeklyMissionClaim().execute(ctx))
+
+    assert result.status == "success"
+    assert result.data["claimed"] == 2
+    # Weekly tab must have been clicked — twice (stabilize + recover).
+    weekly_clicks = [
+        (x, y) for x, y in device.click_log
+        if abs(x - 0.045) < 1e-6 and abs(y - 0.281) < 1e-6
+    ]
+    assert len(weekly_clicks) == 2, (
+        f"expected 2 weekly-tab clicks, got {device.click_log}"
+    )
+    # Stabilize wait must be inserted before the weekly-tab click.
+    assert sleep.await_count >= 1
+
+
 # ── MimiStationCollect / TacticsTaskClaim metadata ─────────────
 
 
@@ -144,26 +200,15 @@ def test_mimi_metadata():
     assert MimiStationCollect.safe is True
 
 
-def test_tactics_can_run_false_when_not_found():
-    """TacticsTaskClaim skips when '对策协议' is not on the hub."""
+def test_tactics_can_run_false_without_red_dot():
+    """TacticsTaskClaim skips when the 对策协议 hub icon has no red dot."""
     ctx = _ctx()
-    # Patch FindTextCheck to return not-passed.
-    with patch(
-        "anime_game_afk.games.aether_gazer.tasks.observation_tasks"
-        ".FindTextCheck.evaluate",
-        AsyncMock(return_value=CheckResult(passed=False, message="not found")),
-    ):
+    with patch(_RED_DOT_PATCH, _red_dot(0.0)):
         assert _run(TacticsTaskClaim().can_run(ctx)) is False
 
 
-def test_tactics_can_run_true_when_found():
+def test_tactics_can_run_true_when_red_dot_present():
+    """TacticsTaskClaim runs when the 对策协议 hub icon shows a red dot."""
     ctx = _ctx()
-    from anime_game_afk.vision.types import TextResult
-    from anime_game_afk.core.types import Rect
-    fake = TextResult(text="对策协议", confidence=0.9, region=Rect(10, 10, 60, 20))
-    with patch(
-        "anime_game_afk.games.aether_gazer.tasks.observation_tasks"
-        ".FindTextCheck.evaluate",
-        AsyncMock(return_value=CheckResult(passed=True, data=fake)),
-    ):
+    with patch(_RED_DOT_PATCH, _red_dot(0.30)):
         assert _run(TacticsTaskClaim().can_run(ctx)) is True
