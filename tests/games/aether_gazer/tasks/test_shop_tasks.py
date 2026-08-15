@@ -11,11 +11,12 @@ classes (ReturnToHubAction.run, WakeHubUiAction.run, etc.) at their class level.
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 
 from anime_game_afk.core.types import Rect
+from anime_game_afk.games.aether_gazer.checks.base import CheckResult
 from anime_game_afk.games.aether_gazer.ops.base import OpResult
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext
 from anime_game_afk.games.aether_gazer.tasks.shop_tasks import (
@@ -57,6 +58,24 @@ _RETURN_TO_HUB_RUN = f"{_SHOP}.ReturnToHubAction.run"
 _WAKE_HUB_RUN = f"{_SHOP}.WakeHubUiAction.run"
 _IS_ON_PAGE = f"{_SHOP}.is_on_page"
 _SMART_RETURN_RUN = f"{_SHOP}.ReturnToHubAction.run"
+
+
+def _patch_red_dot(passed: bool):
+    """Patch RedDotCheck at the shop_tasks namespace to force pass/fail.
+
+    ClaimDailyStaminaPacks Step 0 gates on a hub red dot via RedDotCheck;
+    we stub the class so the gate yields a deterministic CheckResult without
+    running real HSV detection on the mock (black) screenshot.
+    """
+    fake_cls = MagicMock()
+    fake_cls.return_value.evaluate = AsyncMock(
+        return_value=CheckResult(
+            passed=passed,
+            data=0.1 if passed else 0.0,
+            message="red dot (mocked)",
+        ),
+    )
+    return patch(f"{_SHOP}.RedDotCheck", fake_cls)
 
 # Patch targets for underlying vision functions used by Check classes
 _OCR_FIND = "anime_game_afk.games.aether_gazer.checks.ocr.ocr_find"
@@ -237,11 +256,10 @@ def test_daily_stamina_skips_without_red_dot():
     """No red dot on stamina entry → task skips before any navigation."""
     device = MockDevice()
     ctx = TaskContext(device=device)
-    # color_ratio returns 0 for a pure-black screenshot's top-left; patch
-    # it to force no red dot and assert we skip without touching ops.
-    with patch(f"{_SHOP}.color_ratio", return_value=0.0) as mock_cr:
+    # RedDotCheck stubbed to fail → no red dot → skip without touching ops.
+    with _patch_red_dot(False) as mock_rd:
         result = _run(ClaimDailyStaminaPacks().execute(ctx))
-    mock_cr.assert_called_once()
+    mock_rd.assert_called_once()
     assert result.status == "skipped"
     assert "red dot" in result.message.lower()
 
@@ -251,7 +269,7 @@ def test_daily_stamina_returns_failed_when_cannot_reach_hub():
     device = MockDevice()
     ctx = TaskContext(device=device)
     with (
-        patch(f"{_SHOP}.color_ratio", return_value=0.1),  # red dot present
+        _patch_red_dot(True),  # red dot present
         patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=False))),
         patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
     ):
@@ -264,7 +282,7 @@ def test_daily_stamina_claims_packs_on_success():
     device = MockDevice()
     ctx = TaskContext(device=device)
     with (
-        patch(f"{_SHOP}.color_ratio", return_value=0.1),  # red dot present
+        _patch_red_dot(True),  # red dot present
         patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
         patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
         # Mock the private helpers so no real OCR/panel interaction.

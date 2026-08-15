@@ -19,6 +19,7 @@ from anime_game_afk.games.aether_gazer.checks.ocr import (
     OcrFullCheck,
 )
 from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck
+from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
@@ -32,10 +33,11 @@ from anime_game_afk.games.aether_gazer.ops.primitives import (
     SwipeOp,
 )
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
-from anime_game_afk.vision.color import color_ratio
 from anime_game_afk.vision.ocr import ocr_full, ocr_once
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from anime_game_afk.runtime.run_log import RunLog
 
 
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
 _SHOP_KEYWORDS = ("交易区", "补给区")
 
 
-def _is_shop_page(img) -> bool:
+def _is_shop_page(img: np.ndarray) -> bool:
     """Check if screenshot shows the shop page.
 
     Template match first (fast), then OCR fallback (robust).
@@ -720,6 +722,10 @@ class ClaimDailyStaminaPacks:
 
     _TOP_BAR_REGION = Rect(640, 0, 640, 64)  # Top bar where stamina is shown
 
+    # Hub top-bar stamina entry red dot (verified 2026-04-06 @ 1600x900).
+    # Used by the shared RedDotCheck gate in execute Step 0.
+    _STAMINA_RED_DOT = (0.522, 0.028)
+
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
 
@@ -728,23 +734,25 @@ class ClaimDailyStaminaPacks:
 
         ctx.logger.info("=== ClaimDailyStaminaPacks: starting ===")
 
-        # ── Step 0: Check red dot on stamina entry ──
-        ctx.logger.info("[Step 0] Check red dot on stamina at (0.522, 0.028)")
-        r = await ScreenshotOp().run(ctx)
-        red_ratio = color_ratio(
-            r.data,
-            hsv_low=(0, 120, 120), hsv_high=(10, 255, 255),
-            # 20x20 region around red dot position
-            region=Rect(
-                x=int(0.522 * r.data.shape[1]) - 10,
-                y=int(0.028 * r.data.shape[0]) - 10,
-                w=20, h=20,
-            ),
+        # ── Step 0: Red-dot gate on the stamina entry (hub top bar) ──
+        # Uses the shared RedDotCheck (HSV dual-segment + connected-component
+        # blob filter) instead of a hand-rolled color_ratio region, so the
+        # stamina gate benefits from the same noise rejection as the mail /
+        # mission tasks.
+        ctx.logger.info("[Step 0] Check red dot on stamina entry")
+        shot = await ScreenshotOp().run(ctx)
+        dot_check = await RedDotCheck(
+            *self._STAMINA_RED_DOT, label="stamina", image=shot.data,
+        ).evaluate(ctx)
+        has_dot = dot_check.passed
+        ctx.logger.info(
+            f"[Step 0] Red dot on stamina entry: {has_dot} "
+            f"(ratio={dot_check.data:.3f})"
         )
-        has_dot = red_ratio > 0.02
-        ctx.logger.info(f"[Step 0] Red dot: {has_dot} (ratio={red_ratio:.3f})")
         if not has_dot:
-            ctx.logger.info("=== ClaimDailyStaminaPacks: skipped — no red dot ===")
+            ctx.logger.info(
+                "=== ClaimDailyStaminaPacks: skipped — no red dot ==="
+            )
             return TaskResult(
                 status="skipped",
                 message="No red dot on stamina entry",
