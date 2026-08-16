@@ -4,7 +4,12 @@ from __future__ import annotations
 import threading
 from unittest.mock import patch
 
-from anime_game_afk.ui.task_manager import PipelineDef, TaskManager, TaskState
+from anime_game_afk.ui.task_manager import (
+    PipelineDef,
+    TaskManager,
+    TaskState,
+    connect_device,
+)
 
 
 class _DummyJob:
@@ -204,3 +209,21 @@ def test_run_post_action_unknown_is_noop() -> None:
     with patch("anime_game_afk.ui.task_manager.subprocess.run") as m_run:
         tm._run_post_action("bogus_action")
     assert m_run.call_args_list == []
+
+
+def test_connect_device_constructs_and_connects() -> None:
+    from unittest.mock import MagicMock
+
+    fake_device = MagicMock()
+    with patch(
+        "anime_game_afk.ui.task_manager.DeviceAdapter", return_value=fake_device
+    ) as m_dev, patch(
+        "anime_game_afk.ui.task_manager.AETHER_GAZER_CONFIG"
+    ) as m_cfg:
+        m_cfg.to_device_config.return_value = "dev_cfg"
+        result = connect_device()
+
+    assert result is fake_device
+    m_cfg.to_device_config.assert_called_once_with()
+    m_dev.assert_called_once_with(config="dev_cfg")
+    fake_device.connect.assert_called_once_with()

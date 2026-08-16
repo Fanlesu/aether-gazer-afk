@@ -49,6 +49,18 @@ class PipelineDef:
 _CONFIG_PATH = Path("config/ui_state.json")
 
 
+def connect_device() -> DeviceAdapter:
+    """Create and connect a :class:`DeviceAdapter` for the AetherGazer window.
+
+    Game-specific (uses ``AETHER_GAZER_CONFIG``). Collapses the repeated
+    import + construct + connect boilerplate at the 4 call sites. Callers
+    own post-connect logic, error handling, and ``disconnect()``.
+    """
+    device = DeviceAdapter(config=AETHER_GAZER_CONFIG.to_device_config())
+    device.connect()
+    return device
+
+
 class TaskManager:
     """Bridges the UI Api to the existing Pipeline/Process system."""
 
@@ -274,10 +286,7 @@ class TaskManager:
     def connect(self) -> dict[str, Any]:
         """Verify game window is accessible. Connect, get info, release."""
         try:
-            device = DeviceAdapter(
-                config=AETHER_GAZER_CONFIG.to_device_config(),
-            )
-            device.connect()
+            device = connect_device()
             if not device.connected:
                 return {"ok": False, "error": "无法连接到游戏窗口，请确认游戏已启动"}
             res = device.actual_resolution
@@ -461,15 +470,7 @@ class TaskManager:
         closed, hwnd invalid, etc.).
         """
         try:
-            from anime_game_afk.core.device import DeviceAdapter
-            from anime_game_afk.games.aether_gazer.config import (
-                AETHER_GAZER_CONFIG,
-            )
-
-            device = DeviceAdapter(
-                config=AETHER_GAZER_CONFIG.to_device_config(),
-            )
-            device.connect()
+            device = connect_device()
             # disconnect() internally calls release_all_held_keys()
             device.disconnect()
             self._logger.info("自动释放残留按键状态完成")
@@ -715,16 +716,13 @@ class TaskManager:
         """Background thread: run AutoBattleService until stopped."""
         import asyncio
 
-        from anime_game_afk.core.device import DeviceAdapter
         from anime_game_afk.games.aether_gazer.combat.script import load_script
         from anime_game_afk.games.aether_gazer.combat.service import AutoBattleService
-        from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
         from anime_game_afk.games.aether_gazer.ops.base import OpContext
 
         device: DeviceAdapter | None = None
         try:
-            device = DeviceAdapter(config=AETHER_GAZER_CONFIG.to_device_config())
-            device.connect()
+            device = connect_device()
             ctx = OpContext(device=device)
             self._logger.info(
                 "[auto-battle-worker] Loading script: {}", self._auto_battle_script
@@ -844,12 +842,10 @@ class TaskManager:
             # Build a minimal YAML from the steps to parse via existing loader
             import yaml
 
-            from anime_game_afk.core.device import DeviceAdapter
             from anime_game_afk.games.aether_gazer.combat.runner import execute_steps
             from anime_game_afk.games.aether_gazer.combat.script import (
                 load_script_from_string,
             )
-            from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
             from anime_game_afk.games.aether_gazer.ops.base import OpContext
             yaml_data = {
                 "name": "__test__",
@@ -859,8 +855,7 @@ class TaskManager:
             script = load_script_from_string(yaml_str)
 
             # Connect device and replay
-            device = DeviceAdapter(config=AETHER_GAZER_CONFIG.to_device_config())
-            device.connect()
+            device = connect_device()
             ctx = OpContext(device=device)
 
             loop = asyncio.new_event_loop()
