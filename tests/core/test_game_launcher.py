@@ -2,7 +2,7 @@
 import subprocess
 import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from anime_game_afk.engine.game_launcher import GameLauncher
 

@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock
 import numpy as np
 
 from anime_game_afk.engine.workflow_engine import (
-    WorkflowEngine,
     TaskMeta,
+    WorkflowEngine,
 )
 from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
 from anime_game_afk.games.aether_gazer.tasks.base import TaskResult

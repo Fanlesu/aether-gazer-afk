@@ -12,15 +12,15 @@ import cv2
 import numpy as np
 from loguru import logger
 
-from anime_game_afk.engine.device import DeviceAdapter, MAX_HEIGHT
+from anime_game_afk.engine.device import MAX_HEIGHT, DeviceAdapter
 from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
 from anime_game_afk.games.aether_gazer.ops.base import OpContext
+from anime_game_afk.games.aether_gazer.ops.perception.identify_page import is_on_page
 from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
     ClickPxOp,
     ScreenshotOp,
 )
-from anime_game_afk.games.aether_gazer.ops.perception.identify_page import is_on_page
 from anime_game_afk.vision.ocr import ocr_once
 
 

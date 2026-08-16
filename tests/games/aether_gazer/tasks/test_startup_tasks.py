@@ -9,10 +9,11 @@ level so that Check.evaluate() behaves deterministically.
 """
 import asyncio
 from dataclasses import dataclass, field
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 
+from anime_game_afk.core.types import Rect
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext
 from anime_game_afk.games.aether_gazer.tasks.startup_tasks import (
     LaunchAndReachHub,
@@ -21,7 +22,6 @@ from anime_game_afk.games.aether_gazer.tasks.startup_tasks import (
 )
 from anime_game_afk.vision.ocr import OcrResult
 from anime_game_afk.vision.types import TextResult
-from anime_game_afk.core.types import Rect
 
 
 @dataclass
