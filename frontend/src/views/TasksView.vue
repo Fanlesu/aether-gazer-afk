@@ -38,7 +38,9 @@
       <span class="tips-icon">⚠️</span> 使用须知（点击展开）
     </div>
 
-    <TaskList :tasks="currentTasks" />
+    <!-- Daily routine: full L1 orchestration (order + per-task params) -->
+    <TaskOrchestrator v-if="state.selectedPipelineId === 'daily_routine'" />
+    <TaskList v-else :tasks="currentTasks" />
 
     <!-- Duowei-specific settings -->
     <div class="duowei-settings" v-if="state.selectedPipelineId === 'duowei_challenge'">
@@ -116,6 +118,7 @@
 import { ref, computed, onMounted } from 'vue'
 import ConnectionBar from '../components/ConnectionBar.vue'
 import TaskList from '../components/TaskList.vue'
+import TaskOrchestrator from '../components/TaskOrchestrator.vue'
 import ControlBar from '../components/ControlBar.vue'
 import { state, selectedPipeline, selectPipeline } from '../composables/useStore'
 import { api } from '../composables/useApi'

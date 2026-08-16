@@ -33,6 +33,8 @@ export const api = {
     apiCall('set_task_enabled', pipelineId, taskId, enabled),
   setAllEnabled: (pipelineId, enabled) =>
     apiCall('set_all_enabled', pipelineId, enabled),
+  savePlan: (pipelineId, tasks) =>
+    apiCall('save_plan', pipelineId, tasks),
   startRun: (pipelineId) => apiCall('start_run', pipelineId),
   stopRun: () => apiCall('stop_run'),
   recoverInput: () => apiCall('recover_input'),

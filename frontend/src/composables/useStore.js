@@ -87,6 +87,31 @@ export async function toggleAllTasks(enabled) {
   }
 }
 
+// --- L1 task orchestration (user-edited plan: order + enabled + params) ---
+
+export async function savePlan(pipelineId, tasks) {
+  if (!pipelineId) return { ok: false, error: '未选择流程' }
+  const result = await api.savePlan(pipelineId, tasks)
+  if (result && result.ok) {
+    const pipeline = state.pipelines.find(p => p.id === pipelineId)
+    if (pipeline) {
+      // Re-apply the persisted order/enabled/params onto the existing
+      // reactive TaskState objects so live status keeps updating.
+      const known = new Map(pipeline.tasks.map(t => [t.id, t]))
+      const newTasks = []
+      for (const entry of tasks) {
+        const existing = known.get(entry.id)
+        if (!existing) continue
+        existing.enabled = entry.enabled
+        existing.params = entry.params || {}
+        newTasks.push(existing)
+      }
+      if (newTasks.length) pipeline.tasks = newTasks
+    }
+  }
+  return result || { ok: false }
+}
+
 export async function startRun() {
   if (!state.selectedPipelineId) return { ok: false, error: '未选择流程' }
 
