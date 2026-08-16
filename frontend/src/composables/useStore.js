@@ -104,6 +104,8 @@ export async function savePlan(pipelineId, tasks) {
         if (!existing) continue
         existing.enabled = entry.enabled
         existing.params = entry.params || {}
+        existing.condition = entry.condition ?? null
+        existing.on_fail = entry.on_fail || 'skip'
         newTasks.push(existing)
       }
       if (newTasks.length) pipeline.tasks = newTasks

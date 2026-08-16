@@ -2,7 +2,7 @@
   <div class="orch">
     <div class="orch-bar">
       <span class="orch-title">任务编排</span>
-      <span class="orch-sub">调整执行顺序，并为每步设置 超时 / 重试 / 前后等待</span>
+      <span class="orch-sub">调整执行顺序，并为每步设置 超时 / 重试 / 前后等待 / 执行条件 / 失败策略</span>
     </div>
 
     <div class="orch-list">
@@ -73,6 +73,25 @@
                 type="number" min="0" step="0.5"
                 v-model.number="task.params.wait_after"
               >
+            </label>
+          </div>
+
+          <div class="orch-adv">
+            <label class="orch-field">
+              <span>失败策略</span>
+              <select v-model="task.on_fail" class="orch-select">
+                <option value="skip">跳过(默认)</option>
+                <option value="abort">中止计划</option>
+              </select>
+            </label>
+            <label class="orch-field orch-cond">
+              <span>执行条件 (JSON, 可选)</span>
+              <textarea
+                v-model="task.condition"
+                rows="2"
+                spellcheck="false"
+                placeholder='如 {"type":"reddot","key":"mail"}'
+              ></textarea>
             </label>
           </div>
         </div>
@@ -152,6 +171,9 @@ function cloneTasks() {
     name: t.name,
     safe: t.safe,
     enabled: t.enabled,
+    on_fail: t.on_fail || 'skip',
+    // condition is edited as a JSON string in the textarea
+    condition: t.condition ? JSON.stringify(t.condition, null, 2) : '',
     params: {
       timeout: t.params?.timeout ?? null,
       retry: t.params?.retry ?? 0,
@@ -193,6 +215,9 @@ const dirty = computed(() => {
     const b = editTasks.value[i]
     if (a.id !== b.id) return true
     if (a.enabled !== b.enabled) return true
+    if ((a.on_fail || 'skip') !== (b.on_fail || 'skip')) return true
+    // compare condition by canonical JSON (pretty textarea === compact store)
+    if (normCondition(a.condition) !== normCondition(b.condition)) return true
     const ap = a.params || {}
     const bp = b.params
     if ((ap.timeout ?? null) !== (bp.timeout ?? null)) return true
@@ -217,6 +242,25 @@ function toggleEnabled(task) {
 
 // Coerce inputs into the backend contract: timeout is number|null, the rest
 // are non-negative numbers. Empty strings from the inputs become 0/null.
+// Canonical-form a condition for dirty comparison. The store holds a dict
+// (compact JSON), the textarea holds user-edited text (often pretty-printed).
+// Both are normalized to compact JSON so formatting differences don't flag a
+// spurious "unsaved" state. Invalid JSON falls through as its raw text — which
+// is genuinely dirty and will be caught at save time.
+function normCondition(c) {
+  if (!c) return ''
+  if (typeof c === 'string') {
+    const s = c.trim()
+    if (!s) return ''
+    try {
+      return JSON.stringify(JSON.parse(s))
+    } catch {
+      return s
+    }
+  }
+  return JSON.stringify(c)
+}
+
 function normalizeParams(p) {
   const rawTimeout = p.timeout
   const timeout = (
@@ -235,11 +279,29 @@ async function save() {
   if (!p) return
   saving.value = true
   try {
-    const payload = editTasks.value.map(t => ({
-      id: t.id,
-      enabled: t.enabled,
-      params: normalizeParams(t.params),
-    }))
+    const payload = editTasks.value.map(t => {
+      // condition is edited as JSON text; parse it back to a dict here so the
+      // backend contract stays clean (dict | null). Abort the whole save if
+      // any task's JSON is malformed — partial saves would be confusing.
+      let condition = null
+      const raw = (t.condition || '').trim()
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw)
+          condition = parsed && typeof parsed === 'object' ? parsed : null
+        } catch (e) {
+          alert(`任务「${t.name}」的执行条件不是合法 JSON：${e.message}`)
+          throw e
+        }
+      }
+      return {
+        id: t.id,
+        enabled: t.enabled,
+        on_fail: t.on_fail || 'skip',
+        condition,
+        params: normalizeParams(t.params),
+      }
+    })
     const result = await savePlan(p.id, payload)
     if (!result || !result.ok) {
       alert(result?.error || '保存失败')
@@ -408,6 +470,54 @@ function reset() {
 }
 
 .orch-field input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.orch-adv {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 14px;
+  margin-top: 6px;
+}
+
+.orch-select {
+  padding: 3px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.orch-select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.orch-cond {
+  align-items: stretch;
+  flex: 1;
+  min-width: 220px;
+}
+
+.orch-cond textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 40px;
+  padding: 4px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.orch-cond textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
 }
