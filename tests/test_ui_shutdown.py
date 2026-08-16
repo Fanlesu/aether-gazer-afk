@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import threading
+from unittest.mock import patch
 
-from anime_game_afk.ui.task_manager import PipelineDef, TaskState
-from anime_game_afk.ui.task_manager import TaskManager
+from anime_game_afk.ui.task_manager import PipelineDef, TaskManager, TaskState
 
 
 class _DummyJob:
@@ -156,3 +156,51 @@ def test_reader_skips_post_actions_after_manual_stop() -> None:
 
     assert calls == []
     assert tm._stop_requested is False
+
+
+def test_run_post_action_kill_game_invokes_taskkill() -> None:
+    tm = _make_manager()
+    with patch("anime_game_afk.ui.task_manager.subprocess.run") as m_run:
+        tm._run_post_action("kill_game")
+    assert m_run.call_args_list, "subprocess.run should have been called"
+    assert m_run.call_args_list[0].args[0][0] == "taskkill"
+
+
+def test_run_post_action_shutdown_invokes_shutdown() -> None:
+    tm = _make_manager()
+    with patch("anime_game_afk.ui.task_manager.subprocess.run") as m_run:
+        tm._run_post_action("shutdown_pc")
+    assert any(c.args[0][0] == "shutdown" for c in m_run.call_args_list)
+
+
+def test_run_post_action_exit_app_destroys_window() -> None:
+    tm = _make_manager()
+    destroyed: list[bool] = []
+
+    class _Win:
+        def destroy(self) -> None:
+            destroyed.append(True)
+
+    tm._window = _Win()
+
+    class _FakeThread:
+        def __init__(self, target, daemon: bool = False) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            self._target()
+
+    with patch(
+        "anime_game_afk.ui.task_manager.time.sleep", return_value=None
+    ), patch(
+        "anime_game_afk.ui.task_manager.threading.Thread", side_effect=_FakeThread
+    ):
+        tm._run_post_action("exit_app")
+    assert destroyed == [True]
+
+
+def test_run_post_action_unknown_is_noop() -> None:
+    tm = _make_manager()
+    with patch("anime_game_afk.ui.task_manager.subprocess.run") as m_run:
+        tm._run_post_action("bogus_action")
+    assert m_run.call_args_list == []

@@ -1050,71 +1050,13 @@ class TaskManager:
                 return p
         return None
 
-    def _handle_scheduled_post_action(self, proc: subprocess.Popen | None) -> None:
-        """In scheduled mode, apply post-action after pipeline completes."""
-        import builtins
-        if not getattr(builtins, '_SCHEDULED_MODE', False):
-            return
+    def _run_post_action(self, action: str) -> None:
+        """Execute a post-run action: kill_game / exit_app / shutdown_pc.
 
-        from anime_game_afk.runtime.scheduler import load_schedule_config
-        config = load_schedule_config()
-        self._logger.info("[scheduled] Post-action: {}", config.post_action)
-
-        success = proc is not None and proc.returncode == 0
-
-        # Log execution result
-        try:
-            from datetime import datetime
-
-            from anime_game_afk.runtime.scheduler import append_schedule_log
-            elapsed = time.time() - self._start_time if self._start_time else 0
-            append_schedule_log({
-                "timestamp": datetime.now().isoformat(),
-                "pipeline": "daily_routine",
-                "result": "success" if success else "failed",
-                "duration_s": round(elapsed, 1),
-                "retried": False,
-                "post_action": config.post_action,
-            })
-        except Exception as e:
-            self._logger.error("[scheduled] Failed to write log: {}", e)
-
-        if config.post_action in ("kill_game", "exit_app_and_game"):
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", "AetherGazer.exe"],
-                    capture_output=True, timeout=10,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-                self._logger.info("[scheduled] Game process killed")
-            except Exception as e:
-                self._logger.warning("[scheduled] Failed to kill game: {}", e)
-
-        if config.post_action in ("exit_app", "exit_app_and_game"):
-            def _delayed_exit():
-                time.sleep(3)
-                window = self._window
-                if window:
-                    try:
-                        window.destroy()
-                    except Exception:
-                        pass
-            threading.Thread(target=_delayed_exit, daemon=True).start()
-
-    def _handle_manual_post_action(self) -> None:
-        """Apply post-action configured in manual mode (non-scheduled)."""
-        import builtins
-        if getattr(builtins, '_SCHEDULED_MODE', False):
-            return  # scheduled mode has its own handler
-
-        from anime_game_afk.config.user_config import UserConfig
-        cfg = UserConfig.load()
-        action = cfg.post_run_action()
-        if action == "nothing":
-            return
-
-        self._logger.info("[post-action] Manual run post-action: {}", action)
-
+        Unified implementation shared by both the scheduled and manual
+        post-action handlers so the actual side effects live in exactly one
+        place. Unrecognized values are ignored.
+        """
         if action in ("kill_game", "exit_app_and_game"):
             try:
                 subprocess.run(
@@ -1147,3 +1089,52 @@ class TaskManager:
                 )
             except Exception as e:
                 self._logger.warning("[post-action] Shutdown command failed: {}", e)
+
+    def _handle_scheduled_post_action(self, proc: subprocess.Popen | None) -> None:
+        """In scheduled mode, apply post-action after pipeline completes."""
+        import builtins
+        if not getattr(builtins, '_SCHEDULED_MODE', False):
+            return
+
+        from anime_game_afk.runtime.scheduler import load_schedule_config
+        config = load_schedule_config()
+        self._logger.info("[scheduled] Post-action: {}", config.post_action)
+
+        success = proc is not None and proc.returncode == 0
+
+        # Log execution result
+        try:
+            from datetime import datetime
+
+            from anime_game_afk.runtime.scheduler import append_schedule_log
+            elapsed = time.time() - self._start_time if self._start_time else 0
+            append_schedule_log({
+                "timestamp": datetime.now().isoformat(),
+                "pipeline": "daily_routine",
+                "result": "success" if success else "failed",
+                "duration_s": round(elapsed, 1),
+                "retried": False,
+                "post_action": config.post_action,
+            })
+        except Exception as e:
+            self._logger.error("[scheduled] Failed to write log: {}", e)
+
+        # ScheduleConfig only carries nothing/kill_game/exit_app/
+        # exit_app_and_game (shutdown_pc is manual-only), so the shared
+        # dispatcher is safe to call directly here.
+        self._run_post_action(config.post_action)
+
+    def _handle_manual_post_action(self) -> None:
+        """Apply post-action configured in manual mode (non-scheduled)."""
+        import builtins
+        if getattr(builtins, '_SCHEDULED_MODE', False):
+            return  # scheduled mode has its own handler
+
+        from anime_game_afk.config.user_config import UserConfig
+        cfg = UserConfig.load()
+        action = cfg.post_run_action()
+        if action == "nothing":
+            return
+
+        self._logger.info("[post-action] Manual run post-action: {}", action)
+        self._run_post_action(action)
