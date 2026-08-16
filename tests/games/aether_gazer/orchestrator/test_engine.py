@@ -1,0 +1,199 @@
+"""Tests for the generic TaskEngine (orchestrator.engine).
+
+These are pure-logic: no device, no real tasks. A tiny fake task registry
+stands in for the real one so we can assert ordering, enable/disable,
+safe-forcing, unknown-id dropping, retry/timeout, inter-step and
+should-skip hooks in isolation.
+"""
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock
+
+import numpy as np
+
+from anime_game_afk.games.aether_gazer.orchestrator.engine import (
+    PlanStep,
+    TaskEngine,
+    TaskMeta,
+    TaskParams,
+)
+from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
+from anime_game_afk.games.aether_gazer.tasks.base import TaskResult
+
+
+class MockDevice:
+    def screenshot(self) -> np.ndarray:
+        return np.zeros((900, 1600, 3), dtype=np.uint8)
+    def click(self, x: int, y: int) -> None: ...
+    def press_key(self, vk_code: int) -> None: ...
+    def hold_key(self, vk_code: int, duration_s: float) -> None: ...
+
+
+def _ctx(**config) -> ProcessContext:
+    return ProcessContext(device=MockDevice(), config=config)
+
+
+def _make_task(name: str, *, can_run: bool = True,
+               result: TaskResult | None = None) -> type:
+    """Build a fake Task class with mocked can_run/execute."""
+    return type(
+        f"_T_{name}",
+        (),
+        {
+            "name": name,
+            "can_run": AsyncMock(return_value=can_run),
+            "execute": AsyncMock(
+                return_value=result or TaskResult(status="success")
+            ),
+        },
+    )
+
+
+def _registry() -> dict[str, TaskMeta]:
+    return {
+        "startup": TaskMeta(_make_task("startup"), "启动", True),
+        "mail": TaskMeta(_make_task("mail"), "邮件", True),
+        "intel": TaskMeta(_make_task("intel"), "情报", False),
+        "fight": TaskMeta(_make_task("fight"), "战斗", False),
+    }
+
+
+# --- build_plan --------------------------------------------------------
+
+
+def test_build_plan_explicit_order_and_unknown_drop():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = engine.build_plan({"plan": [
+        {"id": "fight"},
+        {"id": "mail"},
+        {"id": "ghost"},  # unknown -> dropped
+    ]})
+    assert [s.task_id for s in plan] == ["fight", "mail"]
+
+
+def test_build_plan_safe_forced_enabled():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = engine.build_plan({"plan": [
+        {"id": "mail", "enabled": False},   # safe -> forced on
+        {"id": "intel", "enabled": False},  # not safe -> stays off
+    ]})
+    by_id = {s.task_id: s for s in plan}
+    assert by_id["mail"].enabled is True
+    assert by_id["intel"].enabled is False
+
+
+def test_build_plan_legacy_enabled_tasks_strict():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = engine.build_plan({"enabled_tasks": {"mail", "fight"}})
+    by_id = {s.task_id: s for s in plan}
+    assert by_id["mail"].enabled is True
+    assert by_id["fight"].enabled is True
+    # legacy path does NOT force safe tasks that aren't in the whitelist
+    assert by_id["startup"].enabled is False
+
+
+def test_build_plan_default_all_enabled():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = engine.build_plan({})
+    assert [s.task_id for s in plan] == list(reg.keys())
+    assert all(s.enabled for s in plan)
+
+
+# --- run ---------------------------------------------------------------
+
+
+def test_run_completes_all_when_can_run_true():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
+    assert result.status == "success"
+    assert set(result.data["completed"]) == set(reg.keys())
+
+
+def test_run_reports_failure():
+    reg = _registry()
+    # make every task fail
+    for meta in reg.values():
+        meta.cls.can_run = AsyncMock(return_value=True)
+        meta.cls.execute = AsyncMock(
+            return_value=TaskResult(status="failed", message="boom")
+        )
+    engine = TaskEngine(reg)
+    result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
+    assert result.status == "failed"
+    assert len(result.data["failed"]) == len(reg)
+
+
+def test_run_skips_when_can_run_false():
+    reg = _registry()
+    for meta in reg.values():
+        meta.cls.can_run = AsyncMock(return_value=False)
+    engine = TaskEngine(reg)
+    result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
+    assert result.status == "success"
+    assert result.data["completed"] == []
+    assert result.data["failed"] == []
+
+
+def test_run_inter_step_called_between_tasks():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    inter = AsyncMock()
+    engine._inter_step = inter
+    result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
+    assert result.status == "success"
+    # inter_step runs once after each of the 4 tasks
+    assert inter.call_count == len(reg)
+
+
+def test_run_should_skip_hook():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    engine._should_skip = lambda step, ctx: (
+        "skip-reason" if step.task_id == "fight" else None
+    )
+    inter = AsyncMock()
+    engine._inter_step = inter
+    result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
+    assert result.status == "success"
+    ids = [c.split("(")[0] for c in result.data["completed"]]
+    assert "fight" not in ids
+    # skipped step still triggers inter_step (return-to-hub safety)
+    assert inter.call_count == len(reg)
+
+
+def test_run_retry_makes_task_succeed():
+    reg = _registry()
+    intel = reg["intel"].cls
+    intel.can_run = AsyncMock(return_value=True)
+    intel.execute = AsyncMock(side_effect=[
+        TaskResult(status="failed", message="boom"),
+        TaskResult(status="success"),
+    ])
+    small = TaskEngine({"intel": reg["intel"]})
+    result = asyncio.run(small.run(_ctx(plan=[{"id": "intel",
+                                                "params": {"retry": 1}}])))
+    assert result.status == "success"
+    assert intel.execute.call_count == 2
+
+
+def test_run_timeout_fails_task():
+    reg = _registry()
+
+    async def slow(_ctx):
+        await asyncio.sleep(1)
+        return TaskResult(status="success")
+
+    fight = reg["fight"].cls
+    fight.can_run = AsyncMock(return_value=True)
+    fight.execute = slow
+    small = TaskEngine({"fight": reg["fight"]})
+    result = asyncio.run(small.run(_ctx(plan=[{"id": "fight",
+                                                "params": {"timeout": 0.1}}])))
+    assert result.status == "failed"
+    assert "fight" in result.data["failed"]
