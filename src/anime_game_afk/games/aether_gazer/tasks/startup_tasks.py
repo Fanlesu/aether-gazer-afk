@@ -194,7 +194,7 @@ def ensure_game_running(
     Returns:
         True if game is running and window is available.
     """
-    from anime_game_afk.core.game_launcher import GameLauncher
+    from anime_game_afk.engine.game_launcher import GameLauncher
 
     launcher = GameLauncher(
         exe_path=exe_path,

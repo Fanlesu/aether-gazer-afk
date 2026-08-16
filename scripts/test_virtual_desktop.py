@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from anime_game_afk.config.user_config import UserConfig
-from anime_game_afk.core.device import DeviceAdapter
+from anime_game_afk.engine.device import DeviceAdapter
 from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
 from anime_game_afk.runtime.logger import get_logger
 

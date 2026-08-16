@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, call, patch
 import numpy as np
 import pytest
 
-from anime_game_afk.core.device import DeviceAdapter
+from anime_game_afk.engine.device import DeviceAdapter
 from anime_game_afk.core.errors import (
     DeviceConnectionError,
     ScreenshotError,
@@ -117,7 +117,7 @@ def test_find_window_success() -> None:
         _fake_window("OtherApp", hwnd=10),
         _fake_window("TestWindow - Level 1", hwnd=42, class_name="UnityWndClass"),
     ]
-    with patch("anime_game_afk.core.device.Toolkit") as mock_toolkit:
+    with patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit:
         mock_toolkit.find_desktop_windows.return_value = windows
         hwnd = adapter.find_window()
 
@@ -130,7 +130,7 @@ def test_find_window_not_found() -> None:
     cfg = _make_config(window_title="MissingGame")
     adapter = DeviceAdapter(cfg)
 
-    with patch("anime_game_afk.core.device.Toolkit") as mock_toolkit:
+    with patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit:
         mock_toolkit.find_desktop_windows.return_value = [
             _fake_window("SomeOtherApp")
         ]
@@ -142,7 +142,7 @@ def test_find_window_empty_list() -> None:
     cfg = _make_config(window_title="Game")
     adapter = DeviceAdapter(cfg)
 
-    with patch("anime_game_afk.core.device.Toolkit") as mock_toolkit:
+    with patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit:
         mock_toolkit.find_desktop_windows.return_value = []
         with pytest.raises(WindowNotFoundError):
             adapter.find_window()
@@ -161,9 +161,9 @@ def connected_adapter() -> DeviceAdapter:
     ctrl_mock = _make_controller_mock(resolution=(1600, 900))
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -208,7 +208,7 @@ def test_connect_raises_when_window_missing() -> None:
     cfg = _make_config(window_title="Ghost")
     adapter = DeviceAdapter(cfg)
 
-    with patch("anime_game_afk.core.device.Toolkit") as mock_toolkit:
+    with patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit:
         mock_toolkit.find_desktop_windows.return_value = []
         with pytest.raises(WindowNotFoundError):
             adapter.connect()
@@ -219,9 +219,9 @@ def test_connect_raises_connection_error_on_controller_failure() -> None:
     adapter = DeviceAdapter(cfg)
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             side_effect=RuntimeError("driver error"),
         ),
     ):
@@ -240,9 +240,9 @@ def test_connect_rejects_non_16_9_aspect_ratio() -> None:
     ctrl_mock = _make_controller_mock(resolution=(1024, 768))
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -266,9 +266,9 @@ def test_click_fractional_coords() -> None:
     ctrl_mock = _make_controller_mock(resolution=(1600, 900))
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -289,9 +289,9 @@ def test_click_center() -> None:
     ctrl_mock = _make_controller_mock(resolution=(1920, 1080))
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -312,9 +312,9 @@ def test_swipe_fractional_coords() -> None:
     ctrl_mock = _make_controller_mock(resolution=(1600, 900))
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -345,9 +345,9 @@ def test_screenshot_scales_down_to_max_height() -> None:
     )
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -371,9 +371,9 @@ def test_screenshot_no_resize_when_height_within_max() -> None:
     )
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -399,9 +399,9 @@ def test_screenshot_raw_returns_actual_resolution_image() -> None:
     )
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -425,9 +425,9 @@ def test_screenshot_raises_when_get_returns_none() -> None:
     ctrl_mock.post_screencap.return_value = screencap_job
 
     with (
-        patch("anime_game_afk.core.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
         patch(
-            "anime_game_afk.core.device.Win32Controller",
+            "anime_game_afk.engine.device.Win32Controller",
             return_value=ctrl_mock,
         ),
     ):
@@ -458,7 +458,7 @@ def test_hold_key_uses_keydown_keyup(
     connected_adapter: DeviceAdapter,
 ) -> None:
     """hold_key sends a single key_down, sleeps, then sends key_up."""
-    with patch("anime_game_afk.core.device.time") as mock_time:
+    with patch("anime_game_afk.engine.device.time") as mock_time:
         mock_time.sleep = MagicMock()
         connected_adapter.hold_key(0x57, 0.3)  # VK_W, 0.3s
 
@@ -472,7 +472,7 @@ def test_hold_key_sends_keyup_even_on_sleep_exception(
     connected_adapter: DeviceAdapter,
 ) -> None:
     """If time.sleep raises, key_up must still be sent (try/finally guarantee)."""
-    with patch("anime_game_afk.core.device.time") as mock_time:
+    with patch("anime_game_afk.engine.device.time") as mock_time:
         mock_time.sleep = MagicMock(side_effect=KeyboardInterrupt())
         with pytest.raises(KeyboardInterrupt):
             connected_adapter.hold_key(0x57, 0.3)

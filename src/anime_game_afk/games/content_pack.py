@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING
 
 from anime_game_afk.config.models import GameConfig
 from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
-from anime_game_afk.games.aether_gazer.registry import build_registry
 
 if TYPE_CHECKING:
     from anime_game_afk.games.aether_gazer.orchestrator.pipeline import (
@@ -60,6 +59,12 @@ _REGISTERED: dict[str, ContentPack] = {}
 
 
 def _register_default_packs() -> None:
+    # Imported lazily to avoid a circular import at module load time:
+    # ``games/__init__.py`` (and transitively the engine package) pulls in
+    # this module, while ``registry`` -> ``daily_routine`` -> the engine would
+    # otherwise form a cycle back into this module.
+    from anime_game_afk.games.aether_gazer.registry import build_registry
+
     _REGISTERED["aether_gazer"] = ContentPack(
         game_id="aether_gazer",
         window_title=AETHER_GAZER_CONFIG.window_title,
@@ -71,11 +76,10 @@ def _register_default_packs() -> None:
     )
 
 
-_register_default_packs()
-
-
 def get_content_pack(game_id: str = "aether_gazer") -> ContentPack:
     """Return the registered content pack for ``game_id`` (default aether_gazer)."""
+    if not _REGISTERED:
+        _register_default_packs()
     pack = _REGISTERED.get(game_id)
     if pack is None:
         raise KeyError(f"Unknown game_id: {game_id!r}")
@@ -84,4 +88,6 @@ def get_content_pack(game_id: str = "aether_gazer") -> ContentPack:
 
 def available_packs() -> list[str]:
     """Return the list of registered game ids."""
+    if not _REGISTERED:
+        _register_default_packs()
     return list(_REGISTERED)

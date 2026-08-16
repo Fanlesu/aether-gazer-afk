@@ -153,7 +153,7 @@ def _run_cli(app_dir: Path) -> None:
     import asyncio
 
     from anime_game_afk.config.user_config import UserConfig
-    from anime_game_afk.core.device import DeviceAdapter
+    from anime_game_afk.engine.device import DeviceAdapter
     from anime_game_afk.core.types import DeviceConfig
     from anime_game_afk.games.aether_gazer.orchestrator.pipeline import Pipeline
     from anime_game_afk.games.aether_gazer.orchestrator.types import (

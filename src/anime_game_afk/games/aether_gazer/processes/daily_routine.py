@@ -2,7 +2,7 @@
 
 Runs all daily tasks in sequence. The actual execution model — ordered
 steps, per-task timeout/retry/wait knobs, return-to-hub between tasks —
-lives in the shared :class:`TaskEngine` (``orchestrator/engine``). This
+lives in the shared :class:`WorkflowEngine` (``engine/workflow_engine``). This
 module only declares the process-specific pieces:
 
 * the task registry (id -> class/name/safe) and its default order, and
@@ -17,16 +17,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from anime_game_afk.games.aether_gazer.orchestrator.conditions import (
-    resolve_condition,
+from anime_game_afk.engine.workflow_engine import (
+    PlanStep,
+    TaskMeta,
+    WorkflowEngine,
 )
-from anime_game_afk.games.aether_gazer.orchestrator.custom_actions import (
+from anime_game_afk.games.aether_gazer.orchestrator.actions import (
     run_custom_action,
 )
-from anime_game_afk.games.aether_gazer.orchestrator.engine import (
-    PlanStep,
-    TaskEngine,
-    TaskMeta,
+from anime_game_afk.games.aether_gazer.orchestrator.conditions import (
+    resolve_condition,
 )
 from anime_game_afk.games.aether_gazer.processes.base import (
     ProcessContext,
@@ -87,7 +87,7 @@ class DailyRoutine:
     """Complete all daily tasks and claim rewards.
 
     A thin process: it owns the task registry and two process-specific
-    rules, and delegates the actual execution to :class:`TaskEngine`.
+    rules, and delegates the actual execution to :class:`WorkflowEngine`.
     """
 
     name = "每日一条龙"
@@ -95,7 +95,7 @@ class DailyRoutine:
 
     def __init__(self) -> None:
         self._hub = ReturnToHub()
-        self._engine = TaskEngine(
+        self._engine = WorkflowEngine(
             _REGISTRY,
             inter_step=self._hub.execute,
             should_skip=self._should_skip,

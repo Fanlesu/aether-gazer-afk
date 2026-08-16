@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
-from anime_game_afk.core.device import DeviceAdapter
+from anime_game_afk.engine.device import DeviceAdapter
 from anime_game_afk.games.aether_gazer.tasks.duowei_tasks import DuoweiCombat
 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext
 

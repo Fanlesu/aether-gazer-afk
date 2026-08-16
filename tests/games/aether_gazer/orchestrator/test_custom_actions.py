@@ -1,4 +1,4 @@
-"""Tests for the L3 custom atomic-action executor (custom_actions.py).
+"""Tests for the L3 custom atomic-action executor (actions.py).
 
 Pure-logic: the device, OCR and RedDotCheck are mocked so we can assert the
 exact calls and the True/False (satisfied/timeout) contract of each action.
@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import numpy as np
 
-from anime_game_afk.games.aether_gazer.orchestrator import custom_actions
+from anime_game_afk.games.aether_gazer.orchestrator import actions
 from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
 
 
@@ -44,7 +44,7 @@ def _fake_result(passed: bool):
 
 def test_click_calls_device():
     ctx = _ctx()
-    assert asyncio.run(custom_actions.run_custom_action(
+    assert asyncio.run(actions.run_custom_action(
         {"type": "click", "x": 0.3, "y": 0.7}, ctx)) is True
     assert ctx.device.clicks == [(0.3, 0.7)]
 
@@ -52,13 +52,13 @@ def test_click_calls_device():
 def test_wait_sleeps():
     ctx = _ctx()
     with patch.object(asyncio, "sleep", new=AsyncMock()):
-        assert asyncio.run(custom_actions.run_custom_action(
+        assert asyncio.run(actions.run_custom_action(
             {"type": "wait", "seconds": 2}, ctx)) is True
 
 
 def test_swipe_calls_device():
     ctx = _ctx()
-    assert asyncio.run(custom_actions.run_custom_action(
+    assert asyncio.run(actions.run_custom_action(
         {"type": "swipe", "x1": 0.1, "y1": 0.8, "x2": 0.1, "y2": 0.2,
          "duration": 400}, ctx)) is True
     assert ctx.device.swipes == [(0.1, 0.8, 0.1, 0.2, 400)]
@@ -66,9 +66,9 @@ def test_swipe_calls_device():
 
 def test_ocr_wait_finds_text():
     ctx = _ctx()
-    with patch.object(custom_actions, "ocr_find", return_value=object()) as f:
+    with patch.object(actions, "ocr_find", return_value=object()) as f:
         with patch.object(asyncio, "sleep", new=AsyncMock()):
-            ok = asyncio.run(custom_actions.run_custom_action(
+            ok = asyncio.run(actions.run_custom_action(
                 {"type": "ocr_wait", "text": "确认", "timeout": 5}, ctx))
     assert ok is True
     f.assert_called_once()
@@ -76,9 +76,9 @@ def test_ocr_wait_finds_text():
 
 def test_ocr_wait_timeout_returns_false():
     ctx = _ctx()
-    with patch.object(custom_actions, "ocr_find", return_value=None):
+    with patch.object(actions, "ocr_find", return_value=None):
         with patch.object(asyncio, "sleep", new=AsyncMock()):
-            ok = asyncio.run(custom_actions.run_custom_action(
+            ok = asyncio.run(actions.run_custom_action(
                 {"type": "ocr_wait", "text": "确认", "timeout": 0.0}, ctx))
     assert ok is False
 
@@ -87,9 +87,9 @@ def test_reddot_wait_finds():
     ctx = _ctx()
     chk = AsyncMock()
     chk.evaluate = AsyncMock(return_value=_fake_result(True))
-    with patch.object(custom_actions, "RedDotCheck", return_value=chk):
+    with patch.object(actions, "RedDotCheck", return_value=chk):
         with patch.object(asyncio, "sleep", new=AsyncMock()):
-            ok = asyncio.run(custom_actions.run_custom_action(
+            ok = asyncio.run(actions.run_custom_action(
                 {"type": "reddot_wait", "fx": 0.5, "fy": 0.5, "timeout": 5},
                 ctx))
     assert ok is True
@@ -99,9 +99,9 @@ def test_reddot_wait_timeout_returns_false():
     ctx = _ctx()
     chk = AsyncMock()
     chk.evaluate = AsyncMock(return_value=_fake_result(False))
-    with patch.object(custom_actions, "RedDotCheck", return_value=chk):
+    with patch.object(actions, "RedDotCheck", return_value=chk):
         with patch.object(asyncio, "sleep", new=AsyncMock()):
-            ok = asyncio.run(custom_actions.run_custom_action(
+            ok = asyncio.run(actions.run_custom_action(
                 {"type": "reddot_wait", "fx": 0.5, "fy": 0.5, "timeout": 0.0},
                 ctx))
     assert ok is False
@@ -109,5 +109,5 @@ def test_reddot_wait_timeout_returns_false():
 
 def test_unknown_action_type_is_skipped():
     ctx = _ctx()
-    assert asyncio.run(custom_actions.run_custom_action(
+    assert asyncio.run(actions.run_custom_action(
         {"type": "teleport"}, ctx)) is True

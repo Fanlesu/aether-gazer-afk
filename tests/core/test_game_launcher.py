@@ -1,10 +1,10 @@
-"""Tests for core.game_launcher — GameLauncher process management."""
+"""Tests for engine.game_launcher — GameLauncher process management."""
 import subprocess
 import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from anime_game_afk.core.game_launcher import GameLauncher
+from anime_game_afk.engine.game_launcher import GameLauncher
 
 
 class TestGameLauncherIsRunning:

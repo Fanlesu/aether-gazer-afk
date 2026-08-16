@@ -104,7 +104,7 @@ class PlanGroup:
 
     @classmethod
     def from_dict(cls, data: dict) -> PlanGroup:
-        items = [TaskEngine._parse_item(e) for e in data.get("steps", [])]
+        items = [WorkflowEngine._parse_item(e) for e in data.get("steps", [])]
         return cls(
             steps=items,
             name=data.get("name", ""),
@@ -137,7 +137,7 @@ ResolveCondition = Callable[[dict, ProcessContext], Awaitable[bool]]
 ActionExecutor = Callable[[dict, ProcessContext], Awaitable[bool]]
 
 
-class TaskEngine:
+class WorkflowEngine:
     """Generic engine that runs an ordered plan of tasks for one process.
 
     Args:

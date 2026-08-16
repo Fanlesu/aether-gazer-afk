@@ -20,7 +20,7 @@ _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root / "src"))
 
 from anime_game_afk.config.user_config import UserConfig
-from anime_game_afk.core.device import DeviceAdapter
+from anime_game_afk.engine.device import DeviceAdapter
 from anime_game_afk.core.game_finder import find_aether_gazer
 from anime_game_afk.core.types import DeviceConfig
 from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG

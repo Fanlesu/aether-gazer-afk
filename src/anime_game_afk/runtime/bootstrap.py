@@ -24,7 +24,7 @@ from anime_game_afk.runtime.logger import get_logger
 
 if TYPE_CHECKING:
     from anime_game_afk.config.user_config import UserConfig
-    from anime_game_afk.core.device import DeviceAdapter
+    from anime_game_afk.engine.device import DeviceAdapter
 
 
 class BootstrapError(RuntimeError):
@@ -105,7 +105,7 @@ def bootstrap_device(
         _status(status_cb, "游戏未运行，正在启动...", log)
         if not exe_path:
             raise BootstrapError("找不到游戏，请在设置中指定游戏路径")
-        from anime_game_afk.core.game_launcher import GameLauncher
+        from anime_game_afk.engine.game_launcher import GameLauncher
 
         launcher = GameLauncher(
             exe_path=exe_path,
@@ -119,7 +119,7 @@ def bootstrap_device(
 
     # --- Connect to the game window -----------------------------------------
     _status(status_cb, "正在连接游戏...", log)
-    from anime_game_afk.core.device import DeviceAdapter
+    from anime_game_afk.engine.device import DeviceAdapter
 
     device_config = pack.config.to_device_config(game_exe_path=exe_path or "")
     device = DeviceAdapter(config=device_config)

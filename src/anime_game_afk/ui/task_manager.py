@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 # Imports from existing layers (L6, L3, L1) — UI only adds, never modifies
-from anime_game_afk.core.device import DeviceAdapter
+from anime_game_afk.engine.device import DeviceAdapter
 from anime_game_afk.games.content_pack import get_content_pack
 from anime_game_afk.runtime.logger import get_logger
 

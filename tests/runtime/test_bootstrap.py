@@ -59,9 +59,9 @@ def test_launch_when_not_running_sets_flag():
     ), patch(
         "anime_game_afk.runtime.bootstrap.get_content_pack"
     ) as m_gcp, patch(
-        "anime_game_afk.core.game_launcher.GameLauncher"
+        "anime_game_afk.engine.game_launcher.GameLauncher"
     ) as m_launcher, patch(
-        "anime_game_afk.core.device.DeviceAdapter"
+        "anime_game_afk.engine.device.DeviceAdapter"
     ) as m_dev:
         m_gcp.return_value = pack
         _patch_deps(pack, m_launcher, m_dev)
@@ -81,9 +81,9 @@ def test_skip_launch_when_already_running():
     ), patch(
         "anime_game_afk.runtime.bootstrap.get_content_pack"
     ) as m_gcp, patch(
-        "anime_game_afk.core.game_launcher.GameLauncher"
+        "anime_game_afk.engine.game_launcher.GameLauncher"
     ) as m_launcher, patch(
-        "anime_game_afk.core.device.DeviceAdapter"
+        "anime_game_afk.engine.device.DeviceAdapter"
     ) as m_dev:
         m_gcp.return_value = pack
         _patch_deps(pack, m_launcher, m_dev)
@@ -101,9 +101,9 @@ def test_connect_failure_raises():
     ), patch(
         "anime_game_afk.runtime.bootstrap.get_content_pack"
     ) as m_gcp, patch(
-        "anime_game_afk.core.game_launcher.GameLauncher"
+        "anime_game_afk.engine.game_launcher.GameLauncher"
     ) as m_launcher, patch(
-        "anime_game_afk.core.device.DeviceAdapter"
+        "anime_game_afk.engine.device.DeviceAdapter"
     ) as m_dev:
         m_gcp.return_value = pack
         # Device reports not connected after connect()
@@ -124,9 +124,9 @@ def test_missing_exe_raises():
     ), patch(
         "anime_game_afk.runtime.bootstrap.get_content_pack"
     ) as m_gcp, patch(
-        "anime_game_afk.core.game_launcher.GameLauncher"
+        "anime_game_afk.engine.game_launcher.GameLauncher"
     ), patch(
-        "anime_game_afk.core.device.DeviceAdapter"
+        "anime_game_afk.engine.device.DeviceAdapter"
     ):
         # No exe on disk and auto-discovery finds nothing.
         m_gcp.return_value = pack

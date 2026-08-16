@@ -14,7 +14,7 @@ from pathlib import Path
 
 from anime_game_afk.runtime.logger import get_logger
 
-logger = get_logger("core.game_launcher")
+logger = get_logger("engine.game_launcher")
 
 
 class GameLauncher:

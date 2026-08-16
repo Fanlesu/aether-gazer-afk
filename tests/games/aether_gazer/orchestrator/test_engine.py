@@ -1,4 +1,4 @@
-"""Tests for the generic TaskEngine (orchestrator.engine).
+"""Tests for the generic WorkflowEngine (engine.workflow_engine).
 
 These are pure-logic: no device, no real tasks. A tiny fake task registry
 stands in for the real one so we can assert ordering, enable/disable,
@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 
-from anime_game_afk.games.aether_gazer.orchestrator.engine import (
-    TaskEngine,
+from anime_game_afk.engine.workflow_engine import (
+    WorkflowEngine,
     TaskMeta,
 )
 from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
@@ -62,7 +62,7 @@ def _registry() -> dict[str, TaskMeta]:
 
 def test_build_plan_explicit_order_and_unknown_drop():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = engine.build_plan({"plan": [
         {"id": "fight"},
         {"id": "mail"},
@@ -73,7 +73,7 @@ def test_build_plan_explicit_order_and_unknown_drop():
 
 def test_build_plan_safe_forced_enabled():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = engine.build_plan({"plan": [
         {"id": "mail", "enabled": False},   # safe -> forced on
         {"id": "intel", "enabled": False},  # not safe -> stays off
@@ -85,7 +85,7 @@ def test_build_plan_safe_forced_enabled():
 
 def test_build_plan_legacy_enabled_tasks_strict():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = engine.build_plan({"enabled_tasks": {"mail", "fight"}})
     by_id = {s.task_id: s for s in plan}
     assert by_id["mail"].enabled is True
@@ -96,7 +96,7 @@ def test_build_plan_legacy_enabled_tasks_strict():
 
 def test_build_plan_default_all_enabled():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = engine.build_plan({})
     assert [s.task_id for s in plan] == list(reg.keys())
     assert all(s.enabled for s in plan)
@@ -107,7 +107,7 @@ def test_build_plan_default_all_enabled():
 
 def test_run_completes_all_when_can_run_true():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
     assert result.status == "success"
     assert set(result.data["completed"]) == set(reg.keys())
@@ -121,7 +121,7 @@ def test_run_reports_failure():
         meta.cls.execute = AsyncMock(
             return_value=TaskResult(status="failed", message="boom")
         )
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
     assert result.status == "failed"
     assert len(result.data["failed"]) == len(reg)
@@ -131,7 +131,7 @@ def test_run_skips_when_can_run_false():
     reg = _registry()
     for meta in reg.values():
         meta.cls.can_run = AsyncMock(return_value=False)
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
     assert result.status == "success"
     assert result.data["completed"] == []
@@ -140,7 +140,7 @@ def test_run_skips_when_can_run_false():
 
 def test_run_inter_step_called_between_tasks():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     inter = AsyncMock()
     engine._inter_step = inter
     result = asyncio.run(engine.run(_ctx(game_was_launched=True)))
@@ -151,7 +151,7 @@ def test_run_inter_step_called_between_tasks():
 
 def test_run_should_skip_hook():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     engine._should_skip = lambda step, ctx: (
         "skip-reason" if step.task_id == "fight" else None
     )
@@ -173,7 +173,7 @@ def test_run_retry_makes_task_succeed():
         TaskResult(status="failed", message="boom"),
         TaskResult(status="success"),
     ])
-    small = TaskEngine({"intel": reg["intel"]})
+    small = WorkflowEngine({"intel": reg["intel"]})
     result = asyncio.run(small.run(_ctx(plan=[{"id": "intel",
                                                 "params": {"retry": 1}}])))
     assert result.status == "success"
@@ -190,7 +190,7 @@ def test_run_timeout_fails_task():
     fight = reg["fight"].cls
     fight.can_run = AsyncMock(return_value=True)
     fight.execute = slow
-    small = TaskEngine({"fight": reg["fight"]})
+    small = WorkflowEngine({"fight": reg["fight"]})
     result = asyncio.run(small.run(_ctx(plan=[{"id": "fight",
                                                 "params": {"timeout": 0.1}}])))
     assert result.status == "failed"
@@ -202,13 +202,13 @@ def test_run_timeout_fails_task():
 
 def test_build_plan_parses_groups():
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = engine.build_plan({"plan": [
         {"id": "mail"},
         {"type": "group", "name": "g", "repeat": 2,
          "steps": [{"id": "intel"}, {"id": "fight"}]},
     ]})
-    from anime_game_afk.games.aether_gazer.orchestrator.engine import PlanGroup
+    from anime_game_afk.engine.workflow_engine import PlanGroup
     assert plan[0].task_id == "mail"
     assert isinstance(plan[1], PlanGroup)
     assert plan[1].repeat == 2
@@ -222,7 +222,7 @@ def test_run_condition_skip_when_resolver_false():
         # block any step whose condition carries gate == "block"
         return cond.get("gate") != "block"
 
-    engine = TaskEngine(
+    engine = WorkflowEngine(
         reg,
         resolve_condition=resolver,
     )
@@ -240,7 +240,7 @@ def test_run_condition_skip_when_resolver_false():
 def test_run_condition_ignored_without_resolver():
     """Backward compat: no resolver wired -> conditions are no-ops."""
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = [{"id": "mail", "condition": {"gate": "block"}}]
     result = asyncio.run(engine.run(_ctx(plan=plan)))
     assert result.status == "success"
@@ -250,7 +250,7 @@ def test_run_condition_ignored_without_resolver():
 def test_run_group_repeats_steps():
     reg = _registry()
     mail = reg["mail"].cls
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = [{"type": "group", "name": "g", "repeat": 3,
              "steps": [{"id": "mail"}]}]
     result = asyncio.run(engine.run(_ctx(plan=plan)))
@@ -266,7 +266,7 @@ def test_run_on_fail_abort_stops_run():
         return_value=TaskResult(status="failed", message="boom")
     )
     mail = reg["mail"].cls
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = [
         {"id": "fight", "on_fail": "abort"},
         {"id": "mail"},
@@ -286,7 +286,7 @@ def test_run_on_fail_skip_continues_by_default():
         return_value=TaskResult(status="failed", message="boom")
     )
     mail = reg["mail"].cls
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = [{"id": "fight"}, {"id": "mail"}]  # on_fail defaults to skip
     result = asyncio.run(engine.run(_ctx(plan=plan)))
     assert result.status == "failed"  # fight failed
@@ -301,7 +301,7 @@ def test_run_nested_group_and_abort_propagates():
         return_value=TaskResult(status="failed", message="boom")
     )
     mail = reg["mail"].cls
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = [{
         "type": "group", "name": "outer", "repeat": 1,
         "steps": [
@@ -319,7 +319,7 @@ def test_run_nested_group_and_abort_propagates():
 
 
 def test_plan_step_from_dict_parses_actions():
-    from anime_game_afk.games.aether_gazer.orchestrator.engine import PlanStep
+    from anime_game_afk.engine.workflow_engine import PlanStep
     step = PlanStep.from_dict({
         "id": "custom_1",
         "actions": [{"type": "click", "x": 0.1, "y": 0.2}],
@@ -331,7 +331,7 @@ def test_plan_step_from_dict_parses_actions():
 def test_build_plan_keeps_custom_step():
     """A custom step (actions set, unknown id) is kept, not dropped."""
     reg = _registry()
-    engine = TaskEngine(reg)
+    engine = WorkflowEngine(reg)
     plan = engine.build_plan({"plan": [
         {"id": "custom_ghost", "actions": [{"type": "wait"}]},
         {"id": "mail"},
@@ -344,7 +344,7 @@ def test_build_plan_keeps_custom_step():
 def test_run_custom_actions_runs_executor():
     reg = _registry()
     executor = AsyncMock(return_value=True)
-    engine = TaskEngine(reg, action_executor=executor)
+    engine = WorkflowEngine(reg, action_executor=executor)
     plan = [{
         "id": "custom_1", "enabled": True,
         "actions": [{"type": "click", "x": 0.5, "y": 0.5},
@@ -359,7 +359,7 @@ def test_run_custom_actions_runs_executor():
 def test_run_custom_action_failure_abort():
     reg = _registry()
     executor = AsyncMock(side_effect=[True, False])  # 2nd action fails
-    engine = TaskEngine(reg, action_executor=executor)
+    engine = WorkflowEngine(reg, action_executor=executor)
     plan = [
         {"id": "custom_1", "enabled": True, "on_fail": "abort",
          "actions": [{"type": "wait"}, {"type": "wait"}]},
@@ -375,7 +375,7 @@ def test_run_custom_action_failure_abort():
 def test_run_custom_action_failure_skip():
     reg = _registry()
     executor = AsyncMock(side_effect=[True, False])
-    engine = TaskEngine(reg, action_executor=executor)
+    engine = WorkflowEngine(reg, action_executor=executor)
     plan = [
         {"id": "custom_1", "enabled": True, "on_fail": "skip",
          "actions": [{"type": "wait"}, {"type": "wait"}]},

@@ -228,6 +228,7 @@ class Api:
         game = cfg.raw.get("games", {}).get(pack.game_id, {})
         return {
             "version": __version__,
+            "default_pipeline_id": pack.default_pipeline_id,
             "window_title": game.get("window_title", pack.window_title),
             "game_exe_path": game.get("game_exe_path", ""),
             "auto_update": cfg.auto_update(),
@@ -506,7 +507,7 @@ class Api:
     def detect_game(self) -> dict[str, Any]:
         """Check if the game is running, return exe path if found."""
         from anime_game_afk.core.game_finder import GameFinder
-        from anime_game_afk.core.game_launcher import GameLauncher
+        from anime_game_afk.engine.game_launcher import GameLauncher
 
         pack = get_content_pack()
         launcher = GameLauncher(
@@ -536,7 +537,7 @@ class Api:
     def launch_game(self) -> dict[str, Any]:
         """Launch the game and wait for its window to appear."""
         from anime_game_afk.config.user_config import UserConfig
-        from anime_game_afk.core.game_launcher import GameLauncher
+        from anime_game_afk.engine.game_launcher import GameLauncher
 
         cfg = UserConfig.load()
         pack = get_content_pack()

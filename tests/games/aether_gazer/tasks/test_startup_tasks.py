@@ -414,7 +414,7 @@ class TestEnsureGameRunning:
         exe.write_bytes(b"fake")
 
         with patch(
-            "anime_game_afk.core.game_launcher.GameLauncher"
+            "anime_game_afk.engine.game_launcher.GameLauncher"
         ) as MockLauncher:
             mock_instance = MockLauncher.return_value
             mock_instance.ensure_running.return_value = True
