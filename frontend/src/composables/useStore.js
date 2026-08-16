@@ -15,6 +15,9 @@ const state = reactive({
   // Pipelines & tasks
   pipelines: [],
   selectedPipelineId: null,
+  // Default pipeline id (the "full daily orchestration" pipeline); loaded from
+  // backend get_settings and falls back to 'daily_routine' before load.
+  default_pipeline_id: 'daily_routine',
 
   // Execution
   running: false,
@@ -54,6 +57,13 @@ export async function loadPipelines() {
     if (data.length > 0 && !state.selectedPipelineId) {
       state.selectedPipelineId = data[0].id
     }
+  }
+}
+
+export async function loadSettings() {
+  const data = await api.getSettings()
+  if (data && data.default_pipeline_id) {
+    state.default_pipeline_id = data.default_pipeline_id
   }
 }
 

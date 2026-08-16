@@ -39,7 +39,7 @@
     </div>
 
     <!-- Daily routine: full L1 orchestration (order + per-task params) -->
-    <TaskOrchestrator v-if="state.selectedPipelineId === 'daily_routine'" />
+    <TaskOrchestrator v-if="state.selectedPipelineId === state.default_pipeline_id" />
     <TaskList v-else :tasks="currentTasks" />
 
     <!-- Duowei-specific settings -->
@@ -85,7 +85,7 @@
     </div>
 
     <!-- Post-run action (daily routine only) -->
-    <div class="post-run-row" v-if="state.selectedPipelineId === 'daily_routine'">
+    <div class="post-run-row" v-if="state.selectedPipelineId === state.default_pipeline_id">
       <label>启动时</label>
       <select
         :value="autoRunOnStartup ? 'auto' : 'manual'"
@@ -231,10 +231,12 @@ function saveTips() {
   localStorage.setItem('tips_dismissed', showTips.value ? 'false' : 'true')
 }
 
-const tipsByPipeline = {
-  daily_routine: [
-    { icon: '🖥', text: '游戏分辨率须为 <b>16:9</b>（如 1920×1080、2560×1440）' },
-  ],
+const defaultTips = [
+  { icon: '🖥', text: '游戏分辨率须为 <b>16:9</b>（如 1920×1080、2560×1440）' },
+]
+
+const tipsByPipeline = computed(() => ({
+  [state.default_pipeline_id]: defaultTips,
   duowei_challenge: [
     { icon: '🖥', text: '游戏分辨率须为 <b>16:9</b>（如 1920×1080、2560×1440）' },
     { icon: '⌨️', text: '操控模式选择「<b>键盘</b>」，不要使用键鼠模式' },
@@ -246,11 +248,11 @@ const tipsByPipeline = {
     { icon: '⚔️', text: '必须<b>手动导航</b>到历战轮回作战准备页面再启动' },
     { icon: '⌨️', text: '操控模式选择「<b>键盘</b>」，确认"挑战下一关"按键与下方设置一致' },
   ],
-}
+}))
 
 const currentTips = computed(() => {
   const id = state.selectedPipelineId
-  return tipsByPipeline[id] || tipsByPipeline.daily_routine || []
+  return tipsByPipeline.value[id] || defaultTips
 })
 
 const currentTasks = computed(() =>

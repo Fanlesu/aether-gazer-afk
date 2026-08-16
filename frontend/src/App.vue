@@ -49,6 +49,7 @@ import { api } from './composables/useApi'
 import {
   state,
   loadPipelines,
+  loadSettings,
   loadRecentLogs,
   pollStatus,
   updateTaskStatus,
@@ -94,6 +95,7 @@ onMounted(async () => {
 
   await loadTheme()
   await loadPipelines()
+  await loadSettings()
   await loadRecentLogs()
 
   // Start status polling

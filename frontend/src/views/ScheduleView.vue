@@ -111,6 +111,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { api } from '../composables/useApi'
+import { state } from '../composables/useStore'
 
 const allDays = [
   { id: 'mon', label: '一' },
@@ -125,7 +126,7 @@ const allDays = [
 const form = reactive({
   enabled: false,
   days: [],
-  pipeline_id: 'daily_routine',
+  pipeline_id: state.default_pipeline_id,
   retry_on_failure: false,
   post_action: 'exit_app_and_game',
 })
@@ -201,7 +202,7 @@ async function loadSchedule() {
   if (data.config) {
     form.enabled = data.config.enabled || false
     form.days = data.config.days || []
-    form.pipeline_id = data.config.pipeline_id || 'daily_routine'
+    form.pipeline_id = data.config.pipeline_id || state.default_pipeline_id
     form.retry_on_failure = data.config.retry_on_failure || false
     form.post_action = data.config.post_action || 'exit_app_and_game'
 
