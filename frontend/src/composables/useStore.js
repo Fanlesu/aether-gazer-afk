@@ -95,17 +95,39 @@ export async function savePlan(pipelineId, tasks) {
   if (result && result.ok) {
     const pipeline = state.pipelines.find(p => p.id === pipelineId)
     if (pipeline) {
-      // Re-apply the persisted order/enabled/params onto the existing
-      // reactive TaskState objects so live status keeps updating.
+      // Re-apply the persisted order/enabled/params/condition/on_fail/actions
+      // onto the reactive task objects so live status keeps updating. New
+      // custom steps (have `actions`, unknown id) are created here too.
       const known = new Map(pipeline.tasks.map(t => [t.id, t]))
       const newTasks = []
       for (const entry of tasks) {
         const existing = known.get(entry.id)
-        if (!existing) continue
+        if (!existing) {
+          // L3: a brand-new custom step — materialize it in the live store.
+          if (entry.actions) {
+            const created = {
+              id: entry.id,
+              name: entry.name || entry.id,
+              description: '',
+              safe: false,
+              status: 'pending',
+              enabled: entry.enabled,
+              params: entry.params || {},
+              condition: entry.condition ?? null,
+              on_fail: entry.on_fail || 'skip',
+              actions: entry.actions ?? null,
+            }
+            known.set(entry.id, created)
+            newTasks.push(created)
+          }
+          continue
+        }
         existing.enabled = entry.enabled
         existing.params = entry.params || {}
         existing.condition = entry.condition ?? null
         existing.on_fail = entry.on_fail || 'skip'
+        existing.actions = entry.actions ?? null
+        existing.name = entry.name || existing.name
         newTasks.push(existing)
       }
       if (newTasks.length) pipeline.tasks = newTasks

@@ -43,8 +43,11 @@
           <div class="orch-name-row">
             <span class="orch-name" :class="{ unsafe: task.safe }">{{ task.name }}</span>
             <span v-if="task.safe" class="orch-lock">🔒 保护</span>
+            <span v-if="isCustom(task)" class="orch-custom-badge">自定义</span>
           </div>
-          <div class="orch-params">
+
+          <!-- Built-in tasks: L1 tuning knobs -->
+          <div v-if="!isCustom(task)" class="orch-params">
             <label class="orch-field">
               <span>超时(秒)</span>
               <input
@@ -75,6 +78,66 @@
               >
             </label>
           </div>
+
+          <!-- Custom steps (L3): visual atomic-action editor -->
+          <template v-else>
+            <label class="orch-field orch-name-edit">
+              <span>名称</span>
+              <input v-model="task.name" placeholder="自定义步骤名" spellcheck="false">
+            </label>
+            <div class="orch-actions-editor">
+              <div
+                v-for="(act, ai) in task.actions"
+                :key="ai"
+                class="orch-action-row"
+              >
+                <div class="orch-action-move">
+                  <button class="orch-move-btn" :disabled="ai === 0" title="上移" @click="moveActionUp(task, ai)">▲</button>
+                  <button class="orch-move-btn" :disabled="ai === task.actions.length - 1" title="下移" @click="moveActionDown(task, ai)">▼</button>
+                </div>
+                <select class="orch-select orch-action-type" v-model="act.type" @change="onActionTypeChange(task, ai)">
+                  <option value="click">点击</option>
+                  <option value="wait">等待</option>
+                  <option value="swipe">滑动</option>
+                  <option value="ocr_wait">OCR 等待</option>
+                  <option value="reddot_wait">红点等待</option>
+                </select>
+
+                <template v-if="act.type === 'click'">
+                  <label class="orch-af">x<input type="number" step="0.01" min="0" max="1" v-model.number="act.x"></label>
+                  <label class="orch-af">y<input type="number" step="0.01" min="0" max="1" v-model.number="act.y"></label>
+                </template>
+                <template v-else-if="act.type === 'wait'">
+                  <label class="orch-af">秒<input type="number" step="0.5" min="0" v-model.number="act.seconds"></label>
+                </template>
+                <template v-else-if="act.type === 'swipe'">
+                  <label class="orch-af">x1<input type="number" step="0.01" min="0" max="1" v-model.number="act.x1"></label>
+                  <label class="orch-af">y1<input type="number" step="0.01" min="0" max="1" v-model.number="act.y1"></label>
+                  <label class="orch-af">x2<input type="number" step="0.01" min="0" max="1" v-model.number="act.x2"></label>
+                  <label class="orch-af">y2<input type="number" step="0.01" min="0" max="1" v-model.number="act.y2"></label>
+                  <label class="orch-af">ms<input type="number" step="50" min="0" v-model.number="act.duration"></label>
+                </template>
+                <template v-else-if="act.type === 'ocr_wait'">
+                  <label class="orch-af orch-af-wide">文本<input v-model="act.text" placeholder="如 确认" spellcheck="false"></label>
+                  <label class="orch-af">x<input type="number" step="0.01" min="0" max="1" v-model.number="act.region[0]"></label>
+                  <label class="orch-af">y<input type="number" step="0.01" min="0" max="1" v-model.number="act.region[1]"></label>
+                  <label class="orch-af">w<input type="number" step="0.01" min="0" max="1" v-model.number="act.region[2]"></label>
+                  <label class="orch-af">h<input type="number" step="0.01" min="0" max="1" v-model.number="act.region[3]"></label>
+                  <label class="orch-af">阈值<input type="number" step="0.05" min="0" max="1" v-model.number="act.threshold"></label>
+                  <label class="orch-af">超时<input type="number" step="1" min="0" v-model.number="act.timeout"></label>
+                </template>
+                <template v-else-if="act.type === 'reddot_wait'">
+                  <select class="orch-select orch-af" v-model="act.key">
+                    <option v-for="k in RED_DOT_KEYS" :key="k" :value="k">{{ k }}</option>
+                  </select>
+                  <label class="orch-af">超时<input type="number" step="1" min="0" v-model.number="act.timeout"></label>
+                </template>
+
+                <button class="orch-action-del" title="删除动作" @click="removeAction(task, ai)">✕</button>
+              </div>
+              <button class="orch-btn-addact" @click="addAction(task)">+ 添加动作</button>
+            </div>
+          </template>
 
           <div class="orch-adv">
             <label class="orch-field">
@@ -109,6 +172,9 @@
     </div>
 
     <div class="orch-actions">
+      <button class="orch-btn-addstep" :disabled="saving" @click="addCustomStep">
+        + 自定义步骤
+      </button>
       <span v-if="dirty" class="orch-dirty">● 未保存的修改</span>
       <button class="orch-btn-reset" :disabled="!dirty || saving" @click="reset">
         重置
@@ -144,6 +210,15 @@ const TASK_ICONS = {
   tactics: '📝',
 }
 
+// Red-dot anchor keys (mirrors knowledge/red_dots.py RED_DOTS). Used only to
+// populate the reddot_wait action dropdown; the backend remains the source of
+// truth for the actual coordinates.
+const RED_DOT_KEYS = [
+  'mail', 'intel_shards_badge', 'free_stamina_supply', 'stamina_pack',
+  'guild_supply_door', 'guild_task_entry', 'amusement_park_task',
+  'hub_mission', 'daily_tab', 'weekly_tab', 'tactics', 'joint_defense_reward',
+]
+
 const STATUS_MAP = {
   pending: '等待',
   running: '运行中',
@@ -172,6 +247,9 @@ function cloneTasks() {
     safe: t.safe,
     enabled: t.enabled,
     on_fail: t.on_fail || 'skip',
+    // actions is a structured list (not JSON text) — deep-cloned so edits
+    // stay buffered until save; null for built-in tasks.
+    actions: t.actions ? JSON.parse(JSON.stringify(t.actions)) : null,
     // condition is edited as a JSON string in the textarea
     condition: t.condition ? JSON.stringify(t.condition, null, 2) : '',
     params: {
@@ -218,6 +296,11 @@ const dirty = computed(() => {
     if ((a.on_fail || 'skip') !== (b.on_fail || 'skip')) return true
     // compare condition by canonical JSON (pretty textarea === compact store)
     if (normCondition(a.condition) !== normCondition(b.condition)) return true
+    // L3: compare the custom action sequence by canonical JSON
+    if (JSON.stringify(a.actions ?? null) !== JSON.stringify(b.actions ?? null)) {
+      return true
+    }
+    if ((a.name ?? '') !== (b.name ?? '')) return true
     const ap = a.params || {}
     const bp = b.params
     if ((ap.timeout ?? null) !== (bp.timeout ?? null)) return true
@@ -238,6 +321,60 @@ function swap(i, j) {
 function toggleEnabled(task) {
   if (task.safe) return  // safe tasks are always on
   task.enabled = !task.enabled
+}
+
+function isCustom(task) {
+  return !!(task.actions)
+}
+
+// --- L3 custom atomic-step editor ------------------------------------
+
+// Default action template when switching type or adding a new action.
+function defaultActionFor(type) {
+  switch (type) {
+    case 'click': return { type: 'click', x: 0.5, y: 0.5 }
+    case 'wait': return { type: 'wait', seconds: 1 }
+    case 'swipe': return { type: 'swipe', x1: 0.2, y1: 0.8, x2: 0.2, y2: 0.2, duration: 500 }
+    case 'ocr_wait': return { type: 'ocr_wait', text: '', region: [0, 0, 0, 0], threshold: 0.5, timeout: 10 }
+    case 'reddot_wait': return { type: 'reddot_wait', key: 'mail', timeout: 10 }
+    default: return { type: 'click', x: 0.5, y: 0.5 }
+  }
+}
+
+function addCustomStep() {
+  editTasks.value.push({
+    id: `custom_${Date.now()}`,
+    name: '自定义步骤',
+    safe: false,
+    enabled: true,
+    on_fail: 'skip',
+    condition: '',
+    actions: [defaultActionFor('click')],
+    params: { timeout: null, retry: 0, wait_before: 0, wait_after: 0 },
+  })
+}
+
+function addAction(task) {
+  task.actions.push(defaultActionFor('click'))
+}
+
+function removeAction(task, i) {
+  task.actions.splice(i, 1)
+}
+
+function moveActionUp(task, i) { if (i > 0) actionSwap(task, i, i - 1) }
+function moveActionDown(task, i) {
+  if (i < task.actions.length - 1) actionSwap(task, i, i + 1)
+}
+function actionSwap(task, i, j) {
+  const arr = task.actions
+  ;[arr[i], arr[j]] = [arr[j], arr[i]]
+}
+
+// Switching the type resets the action to that type's default fields, so the
+// editor never shows stale parameters from the previous type.
+function onActionTypeChange(task, i) {
+  task.actions[i] = defaultActionFor(task.actions[i].type)
 }
 
 // Coerce inputs into the backend contract: timeout is number|null, the rest
@@ -297,8 +434,11 @@ async function save() {
       return {
         id: t.id,
         enabled: t.enabled,
+        name: t.name,
         on_fail: t.on_fail || 'skip',
         condition,
+        // actions is a structured list (null for built-in tasks)
+        actions: t.actions ? t.actions : null,
         params: normalizeParams(t.params),
       }
     })
@@ -644,5 +784,144 @@ function reset() {
 .task-check.locked {
   cursor: not-allowed;
   opacity: 0.8;
+}
+
+/* L3 custom-step editor */
+.orch-custom-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border-strong);
+}
+
+.orch-name-edit {
+  margin-top: 5px;
+}
+
+.orch-name-edit input {
+  width: 150px;
+  padding: 3px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.orch-name-edit input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.orch-actions-editor {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas, var(--bg-surface));
+}
+
+.orch-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+}
+
+.orch-action-move {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.orch-action-type {
+  min-width: 92px;
+}
+
+.orch-af {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.orch-af input {
+  width: 46px;
+  padding: 2px 4px;
+  text-align: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.orch-af input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.orch-af-wide input {
+  width: 92px;
+}
+
+.orch-action-del {
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--chip-inactive-border);
+  background: var(--chip-inactive-bg);
+  color: var(--status-error-text);
+  cursor: pointer;
+}
+
+.orch-action-del:hover {
+  border-color: var(--status-error-text);
+}
+
+.orch-btn-addact {
+  align-self: flex-start;
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  cursor: pointer;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent-border);
+  color: var(--accent-text);
+  transition: all 0.15s ease;
+}
+
+.orch-btn-addact:hover {
+  border-color: var(--accent-primary);
+}
+
+.orch-btn-addstep {
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-border-strong);
+  color: var(--accent-text);
+  transition: all 0.15s ease;
+}
+
+.orch-btn-addstep:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.orch-btn-addstep:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
