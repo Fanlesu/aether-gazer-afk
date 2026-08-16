@@ -102,10 +102,6 @@ async def _run(
     """
     # Late imports so the module can be parsed even if deps aren't installed.
     from anime_game_afk.config.user_config import UserConfig
-    from anime_game_afk.core.device import DeviceAdapter
-    from anime_game_afk.core.game_finder import find_aether_gazer
-    from anime_game_afk.core.game_launcher import GameLauncher
-    from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
     from anime_game_afk.games.aether_gazer.orchestrator.pipeline import Pipeline
     from anime_game_afk.games.aether_gazer.orchestrator.types import (
         PlanConfig,
@@ -113,6 +109,10 @@ async def _run(
     )
     from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
     from anime_game_afk.games.aether_gazer.registry import build_registry
+    from anime_game_afk.runtime.bootstrap import (
+        BootstrapError,
+        bootstrap_device,
+    )
     from anime_game_afk.runtime.logger import get_logger
 
     listener = JsonLineListener()
@@ -142,64 +142,15 @@ async def _run(
     user_cfg = UserConfig.load()
     notify_on_complete = user_cfg.notify_on_complete()
 
-    # ---- Resolve game exe path (needed for both modes) --------------------
-    game_id = "aether_gazer"
-    window_title = user_cfg.window_title(game_id) or "AetherGazer"
-    exe_path = user_cfg.game_exe_path(game_id)
-
-    if not exe_path or not __import__("pathlib").Path(exe_path).exists():
-        found = find_aether_gazer(search_drives=user_cfg.search_drives())
-        game_exe = found.get("game_exe")
-        launcher = found.get("launcher")
-        if game_exe:
-            user_cfg.set_game_exe_path(game_id, game_exe)
-            if launcher:
-                user_cfg.set_launcher_path(game_id, launcher)
-            user_cfg.save()
-            exe_path = game_exe
-
-    # ---- Ensure game is running ---------------------------------------------
-    game_process_running = False
-    _emit({"type": "status", "msg": "正在查找游戏窗口..."})
+    # ---- Bring up the game device (shared bootstrap) ----------------------
     try:
-        import subprocess as _sp
-        r = _sp.run(["tasklist", "/FI", "IMAGENAME eq AetherGazer.exe", "/NH"],
-                     capture_output=True, text=True, timeout=5)
-        game_process_running = "AetherGazer.exe" in r.stdout
-    except Exception:
-        pass
-
-    if not game_process_running:
-        _emit({"type": "status", "msg": "游戏未运行，正在启动..."})
-        if not exe_path:
-            _emit({"type": "error", "msg": "找不到游戏，请在设置中指定游戏路径"})
-            return 1
-
-        launcher = GameLauncher(
-            exe_path=exe_path,
-            window_title=window_title,
-            process_name=__import__("pathlib").Path(exe_path).name,
+        device, game_was_launched = bootstrap_device(
+            user_cfg,
+            logger=logger,
+            status_cb=lambda m: _emit({"type": "status", "msg": m}),
         )
-        timeout = user_cfg.launch_timeout(game_id)
-        if not launcher.ensure_running(timeout=timeout):
-            _emit({"type": "error", "msg": f"启动游戏超时 ({timeout}s)"})
-            return 1
-
-    # Connect to game window
-    _emit({"type": "status", "msg": "正在连接游戏..."})
-
-    try:
-        device_config = AETHER_GAZER_CONFIG.to_device_config(
-            game_exe_path=exe_path or "",
-        )
-        device = DeviceAdapter(config=device_config)
-        device.connect()
-    except Exception as exc:
-        _emit({"type": "error", "msg": f"连接失败: {exc}"})
-        return 1
-
-    if not device.connected:
-        _emit({"type": "error", "msg": "无法连接到游戏窗口"})
+    except BootstrapError as exc:
+        _emit({"type": "error", "msg": str(exc)})
         return 1
 
     # Best-effort cleanup hooks: any "soft" interpreter shutdown (atexit,
@@ -252,7 +203,7 @@ async def _run(
     # ---- Build plan from CLI args -----------------------------------------
     config: dict[str, Any] = {
         "enabled_tasks": sorted(enabled_ids),
-        "game_was_launched": not game_process_running,
+        "game_was_launched": game_was_launched,
     }
     if plan is not None:  # explicit L1 plan (ordered steps + params)
         config["plan"] = plan

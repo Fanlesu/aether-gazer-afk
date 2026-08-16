@@ -14,7 +14,6 @@ import asyncio
 import subprocess
 import time
 from datetime import datetime
-from pathlib import Path
 
 from anime_game_afk.runtime.logger import get_logger
 from anime_game_afk.runtime.scheduler import (
@@ -45,10 +44,6 @@ def _kill_game() -> None:
 async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
     """Run the daily pipeline. Returns (success, message, elapsed_seconds)."""
     from anime_game_afk.config.user_config import UserConfig
-    from anime_game_afk.core.device import DeviceAdapter
-    from anime_game_afk.core.game_finder import find_aether_gazer
-    from anime_game_afk.core.game_launcher import GameLauncher
-    from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
     from anime_game_afk.games.aether_gazer.orchestrator.pipeline import Pipeline
     from anime_game_afk.games.aether_gazer.orchestrator.types import (
         PlanConfig,
@@ -56,64 +51,20 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
     )
     from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
     from anime_game_afk.games.aether_gazer.registry import build_registry
+    from anime_game_afk.runtime.bootstrap import (
+        BootstrapError,
+        bootstrap_device,
+    )
 
     start_time = time.monotonic()
     user_cfg = UserConfig.load()
-
-    # --- Resolve game exe ---
     game_id = "aether_gazer"
-    window_title = user_cfg.window_title(game_id) or "AetherGazer"
-    exe_path = user_cfg.game_exe_path(game_id)
 
-    if not exe_path or not Path(exe_path).exists():
-        found = find_aether_gazer(search_drives=user_cfg.search_drives())
-        game_exe = found.get("game_exe")
-        launcher = found.get("launcher")
-        if game_exe:
-            user_cfg.set_game_exe_path(game_id, game_exe)
-            if launcher:
-                user_cfg.set_launcher_path(game_id, launcher)
-            user_cfg.save()
-            exe_path = game_exe
-
-    # --- Ensure game is running ---
-    game_was_launched = False
-    game_running = False
+    # --- Bring up the game device (shared bootstrap) ---
     try:
-        r = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq AetherGazer.exe", "/NH"],
-            capture_output=True, text=True, timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        game_running = "AetherGazer.exe" in r.stdout
-    except Exception:
-        pass
-
-    if not game_running:
-        if not exe_path:
-            return False, "找不到游戏路径", time.monotonic() - start_time
-        logger.info("Game not running, launching: {}", exe_path)
-        launcher = GameLauncher(
-            exe_path=exe_path,
-            window_title=window_title,
-            process_name=Path(exe_path).name,
-        )
-        timeout = user_cfg.launch_timeout(game_id)
-        if not launcher.ensure_running(timeout=timeout):
-            return False, f"启动游戏超时 ({timeout}s)", time.monotonic() - start_time
-        game_was_launched = True
-
-    # --- Connect ---
-    logger.info("Connecting to game...")
-    device_config = AETHER_GAZER_CONFIG.to_device_config(game_exe_path=exe_path or "")
-    device = DeviceAdapter(config=device_config)
-    try:
-        device.connect()
-    except Exception as exc:
-        return False, f"连接失败: {exc}", time.monotonic() - start_time
-
-    if not device.connected:
-        return False, "无法连接到游戏窗口", time.monotonic() - start_time
+        device, game_was_launched = bootstrap_device(user_cfg, logger=logger)
+    except BootstrapError as exc:
+        return False, str(exc), time.monotonic() - start_time
 
     res = device.actual_resolution
     logger.info("Connected. Resolution: {}x{}", res.width, res.height)
@@ -132,7 +83,8 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
             launch_result = await launch_task.execute(ctx)
             if launch_result.status != "success":
                 device.disconnect()
-                return False, f"无法到达主界面: {launch_result.message}", time.monotonic() - start_time
+                msg = f"无法到达主界面: {launch_result.message}"
+                return False, msg, time.monotonic() - start_time
         except Exception as exc:
             device.disconnect()
             return False, f"启动导航失败: {exc}", time.monotonic() - start_time
