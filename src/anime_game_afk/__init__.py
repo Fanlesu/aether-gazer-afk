@@ -1,3 +1,3 @@
 """Anime Game AFK - 游戏自动化平台"""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

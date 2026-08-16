@@ -8,7 +8,7 @@
 通过截图+图像识别操作游戏，后台运行，不抢焦点。
 多数领取类任务带**智能红点门控**：无待领奖励时自动跳过，减少无效点击与空跑。
 
-> 本项目 fork 自 [fxmoling/anime-game-afk](https://github.com/fxmoling/anime-game-afk)，当前 v0.3.0 维护并发布于 [Fanlesu/aether-gazer-afk](https://github.com/Fanlesu/aether-gazer-afk)。
+> 本项目 fork 自 [fxmoling/anime-game-afk](https://github.com/fxmoling/anime-game-afk)，当前 v0.4.0 维护并发布于 [Fanlesu/aether-gazer-afk](https://github.com/Fanlesu/aether-gazer-afk)。
 
 ---
 
@@ -121,8 +121,8 @@ python build.py --zip
 在本仓库推送版本标签即可触发 GitHub Actions 自动构建发版（构建 Windows 版 exe 并打包为 zip 上传到 Release）：
 
 ```bash
-git tag v0.3.0
-git push <你的仓库 remote> v0.3.0
+git tag v0.4.0
+git push <你的仓库 remote> v0.4.0
 ```
 
 GitHub Actions 会自动：构建前端 → 打包 exe（`python build.py --zip`）→ 创建 Release 并上传 `anime-game-afk.zip`。
