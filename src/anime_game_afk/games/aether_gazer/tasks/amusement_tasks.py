@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
+from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
 )
@@ -31,7 +32,7 @@ _AUTO_PLACE_X, _AUTO_PLACE_Y = 0.678, 0.918     # 自动放置 button (1084,826 
 _FEED_X, _FEED_Y = 0.855, 0.918                 # 一键投喂 button (1368,826 @ 1600x900)
 
 # Red-dot gate (verify per resolution with coord picker)
-_PARK_TASK_RED_DOT_X, _PARK_TASK_RED_DOT_Y = 0.682, 0.898  # 游园任务 claimable indicator
+_PARK_TASK_RED_DOT_X, _PARK_TASK_RED_DOT_Y = RED_DOTS["amusement_park_task"]  # 游园任务 claimable indicator
 
 
 class AmusementStreetDaily:

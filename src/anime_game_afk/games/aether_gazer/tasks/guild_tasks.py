@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
+from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
 )
@@ -36,8 +37,8 @@ _SUPPLY_CLAIM_X, _SUPPLY_CLAIM_Y = 0.5, 0.71
 _GUILD_DAILY_CLAIM_X, _GUILD_DAILY_CLAIM_Y = 0.898, 0.919
 
 # Red-dot gates (verify per resolution with coord picker)
-_SUPPLY_RED_DOT_X, _SUPPLY_RED_DOT_Y = 0.961, 0.907  # 矩阵补给 claimable indicator
-_TASK_RED_DOT_X, _TASK_RED_DOT_Y = 0.837, 0.906       # 公会任务 claimable indicator
+_SUPPLY_RED_DOT_X, _SUPPLY_RED_DOT_Y = RED_DOTS["guild_supply_door"]  # 矩阵补给 claimable indicator
+_TASK_RED_DOT_X, _TASK_RED_DOT_Y = RED_DOTS["guild_task_entry"]       # 公会任务 claimable indicator
 
 
 class GuildSupplyClaim:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_G, VK_T
+from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import (
     RapidClickAction,
 )
@@ -37,10 +38,10 @@ _MIMI_CLAIM_X, _MIMI_CLAIM_Y = 0.753, 0.899
 
 # Red dot positions (verified via coord-picker)
 # Hub gate: mission entry red dot — if absent there is nothing to claim.
-_HUB_MISSION_RED_DOT = (0.828, 0.094)
+_HUB_MISSION_RED_DOT = RED_DOTS["hub_mission"]
 # Inside the daily/weekly panel, left sidebar tabs:
-_DAILY_TAB_RED_DOT = (0.058, 0.142)    # 日常任务 tab red dot
-_WEEKLY_TAB_RED_DOT = (0.058, 0.248)   # 周常任务 tab red dot (detection only)
+_DAILY_TAB_RED_DOT = RED_DOTS["daily_tab"]    # 日常任务 tab red dot
+_WEEKLY_TAB_RED_DOT = RED_DOTS["weekly_tab"]   # 周常任务 tab red dot (detection only)
 _WEEKLY_TAB_CLICK = (0.045, 0.281)     # 周常任务 tab 点击目标 (coord-picker @2560x1440)
 # After the daily-claim reward animation the UI stutters; a single weekly-tab
 # click dispatched immediately is often swallowed, leaving us stuck on the
@@ -291,7 +292,7 @@ class TacticsTaskClaim:
     _TACTICS_CLAIM_X, _TACTICS_CLAIM_Y = 0.925, 0.956
     # Red dot on the 对策协议 hub icon (coord-picker 实测 @hub). Gate the
     # whole task on it: no red dot ⇒ no pending rewards ⇒ skip.
-    _TACTICS_RED_DOT = (0.052, 0.153)
+    _TACTICS_RED_DOT = RED_DOTS["tactics"]
 
     async def can_run(self, ctx: TaskContext) -> bool:
         """Gate on the red dot on the 对策协议 hub icon.

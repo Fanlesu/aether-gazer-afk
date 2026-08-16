@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_H
+from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
 )
@@ -19,7 +20,7 @@ from anime_game_afk.games.aether_gazer.tasks.base import TaskContext, TaskResult
 _COLLECT_ALL_X, _COLLECT_ALL_Y = 0.182, 0.832   # 全部领取 button
 
 # Red dot position on the mail icon at the hub (verified via coord-picker)
-_MAIL_RED_DOT = (0.870, 0.099)
+_MAIL_RED_DOT = RED_DOTS["mail"]
 
 
 class CollectAllMail:

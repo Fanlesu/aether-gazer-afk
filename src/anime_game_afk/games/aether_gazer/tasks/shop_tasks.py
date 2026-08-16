@@ -21,6 +21,7 @@ from anime_game_afk.games.aether_gazer.checks.ocr import (
 from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
+from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
 from anime_game_afk.games.aether_gazer.ops.perception.identify_page import is_on_page
@@ -96,7 +97,7 @@ class BuyIntelShards:
     # Intel-badge exchange red dot on the 交易中心/情报兑换 sidebar entry
     # (verified 2026-04-06 @ 1600x900). Gates Step 3 (badge exchange):
     # only attempt the exchange when this dot is present.
-    _INTEL_BADGE_RED_DOT = (0.056, 0.256)
+    _INTEL_BADGE_RED_DOT = RED_DOTS["intel_shards_badge"]
 
     async def can_run(self, ctx: TaskContext) -> bool:
         """Always runnable — actual availability checked during execute."""
@@ -517,7 +518,7 @@ class ClaimFreeStamina:
 
     # Red dot marking a pending free-stamina claim on the shop's
     # supply-area entry. Gated before the 补给区 navigation step.
-    _SUPPLY_RED_DOT = (0.386, 0.801)
+    _SUPPLY_RED_DOT = RED_DOTS["free_stamina_supply"]
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
@@ -792,7 +793,7 @@ class ClaimDailyStaminaPacks:
 
     # Hub top-bar stamina entry red dot (verified 2026-04-06 @ 1600x900).
     # Used by the shared RedDotCheck gate in execute Step 0.
-    _STAMINA_RED_DOT = (0.522, 0.028)
+    _STAMINA_RED_DOT = RED_DOTS["stamina_pack"]
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True

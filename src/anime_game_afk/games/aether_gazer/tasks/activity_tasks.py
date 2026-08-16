@@ -21,6 +21,7 @@ from anime_game_afk.games.aether_gazer.checks.ocr import (
 from anime_game_afk.games.aether_gazer.checks.page import OnPageCheck
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
+from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
 from anime_game_afk.games.aether_gazer.ops.primitives import (
@@ -87,7 +88,7 @@ class JointDefenseSweep:
     _OCR_RETRY_DELAY = 1.5
     # Reward-entry red dot on the 联防协议 detail page (the page just before
     # returning to hub). Gate the 一键领取 reward-claim on its presence.
-    _REWARD_RED_DOT_X, _REWARD_RED_DOT_Y = 0.058, 0.540
+    _REWARD_RED_DOT_X, _REWARD_RED_DOT_Y = RED_DOTS["joint_defense_reward"]
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
