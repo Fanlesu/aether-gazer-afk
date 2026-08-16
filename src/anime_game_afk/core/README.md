@@ -1,15 +1,21 @@
 # core/
 
-Layer 1 — Device Adapter. Single point of contact with MaaFramework.
+Game-agnostic infrastructure utilities. Shared by all games; no device control, no game logic.
+
+> Note: the device adapter (`device.py`) and game launcher (`game_launcher.py`) were moved to the `engine/` package.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `types.py` | Shared types: Point, Rect, Resolution, DeviceConfig |
-| `device.py` | DeviceAdapter — screenshot, click, press_key, hold_key, swipe |
 | `errors.py` | Exception hierarchy: AutomationError, DeviceError, DeviceConnectionError, etc. |
-| `session.py` | **Deprecated** — old GameSession, delegates to DeviceAdapter |
+| `game_finder.py` | Locate the game window / executable |
+| `hotkey_listener.py` | Global hotkey registration |
+| `input_guard.py` | Serialize / guard input actions |
+| `job_object.py` | Windows Job Object for child-process lifecycle management |
+| `notifier.py` | Desktop notifications (toast) |
+| `virtual_desktop.py` | Isolated virtual desktop for headless runs |
 
 ## Key Types
 
@@ -18,4 +24,4 @@ Layer 1 — Device Adapter. Single point of contact with MaaFramework.
 
 ## Layer Rule
 
-This layer may only import from Layer 0 (MaaFramework). No game logic, no config/ imports.
+This package is game-agnostic infrastructure. It may depend on MaaFramework (Layer 0) and other shared utilities, but never on game-specific code (Layers 4-8) or config that is game-bound.

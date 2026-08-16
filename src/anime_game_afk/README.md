@@ -6,7 +6,8 @@ Layered game automation framework built on MaaFramework.
 
 ```
 src/anime_game_afk/
-├── core/              # Layer 1: Device adapter (MaaFw wrapper)
+├── engine/            # Game-agnostic engine: device adapter (MaaFw wrapper) + WorkflowEngine (generic task engine) + game launcher
+├── core/              # Game-agnostic infrastructure utilities (types, errors, hotkey, virtual desktop, job object, notifier, game finder, input guard)
 ├── vision/            # Layer 2: Game-agnostic computer vision
 ├── runtime/           # Layer 3: Logging, config, state, events, errors
 ├── config/            # Application configuration models
