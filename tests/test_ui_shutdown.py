@@ -218,12 +218,12 @@ def test_connect_device_constructs_and_connects() -> None:
     with patch(
         "anime_game_afk.ui.task_manager.DeviceAdapter", return_value=fake_device
     ) as m_dev, patch(
-        "anime_game_afk.ui.task_manager.AETHER_GAZER_CONFIG"
-    ) as m_cfg:
-        m_cfg.to_device_config.return_value = "dev_cfg"
+        "anime_game_afk.ui.task_manager._PACK"
+    ) as m_pack:
+        m_pack.config.to_device_config.return_value = "dev_cfg"
         result = connect_device()
 
     assert result is fake_device
-    m_cfg.to_device_config.assert_called_once_with()
+    m_pack.config.to_device_config.assert_called_once_with()
     m_dev.assert_called_once_with(config="dev_cfg")
     fake_device.connect.assert_called_once_with()

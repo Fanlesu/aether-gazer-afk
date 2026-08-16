@@ -12,6 +12,7 @@ from pathlib import Path
 
 import webview  # type: ignore[import-untyped]
 
+from anime_game_afk.games.content_pack import get_content_pack
 from anime_game_afk.ui.api import Api
 from anime_game_afk.ui.bridge import LogForwarder
 from anime_game_afk.ui.task_manager import TaskManager
@@ -261,8 +262,9 @@ def main() -> None:
             import time
             def _auto_start():
                 time.sleep(2)  # Wait for frontend JS to initialize
-                _log.info("[{}] Auto-starting pipeline: daily_routine", reason)
-                result = task_manager.start("daily_routine")
+                _log.info("[{}] Auto-starting pipeline: {}", reason,
+                          get_content_pack().default_pipeline_id)
+                result = task_manager.start(get_content_pack().default_pipeline_id)
                 _log.info("[{}] start result: {}", reason, result)
             threading.Thread(target=_auto_start, daemon=True).start()
 

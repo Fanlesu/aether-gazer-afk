@@ -154,23 +154,22 @@ def _run_cli(app_dir: Path) -> None:
 
     from anime_game_afk.config.user_config import UserConfig
     from anime_game_afk.core.device import DeviceAdapter
-    from anime_game_afk.core.game_finder import find_aether_gazer
     from anime_game_afk.core.types import DeviceConfig
-    from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
     from anime_game_afk.games.aether_gazer.orchestrator.pipeline import Pipeline
     from anime_game_afk.games.aether_gazer.orchestrator.types import (
         ProcessDef,
         load_plan,
     )
     from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
-    from anime_game_afk.games.aether_gazer.registry import build_registry
     from anime_game_afk.games.aether_gazer.tasks.startup_tasks import (
         LaunchAndReachHub,
         ensure_game_running,
     )
+    from anime_game_afk.games.content_pack import get_content_pack
     from anime_game_afk.runtime.logger import get_logger
 
     logger = get_logger("run")
+    pack = get_content_pack()
 
     # Default plan: look beside exe first, then _internal, then source
     default_plan_candidates = [
@@ -205,7 +204,7 @@ def _run_cli(app_dir: Path) -> None:
     print()
 
     def make_device_config() -> DeviceConfig:
-        return AETHER_GAZER_CONFIG.to_device_config()
+        return pack.config.to_device_config()
 
     def build_context_factory(device: DeviceAdapter):  # type: ignore[return]
         def factory(proc_def: ProcessDef) -> ProcessContext:
@@ -217,7 +216,7 @@ def _run_cli(app_dir: Path) -> None:
         return factory
 
     async def run() -> int:
-        registry = build_registry()
+        registry = pack.build_registry()
 
         if args.list:
             print("Available processes:")
@@ -239,11 +238,11 @@ def _run_cli(app_dir: Path) -> None:
         user_cfg = UserConfig.load()
 
         if args.detect_game:
-            game_id = "aether_gazer"
+            game_id = pack.game_id
             exe_path = user_cfg.game_exe_path(game_id)
             if not exe_path or not Path(exe_path).exists():
-                logger.info("Auto-detecting AetherGazer...")
-                result = find_aether_gazer(search_drives=user_cfg.search_drives())
+                logger.info("Auto-detecting {}...", pack.window_title)
+                result = pack.find_game(search_drives=user_cfg.search_drives())
                 if result["game_exe"]:
                     user_cfg.set_game_exe_path(game_id, result["game_exe"])
                     if result["launcher"]:
@@ -253,14 +252,14 @@ def _run_cli(app_dir: Path) -> None:
             if exe_path:
                 print(f"Game exe: {exe_path}")
                 return 0
-            print("ERROR: Could not find AetherGazer.")
+            print(f"ERROR: Could not find {pack.window_title}.")
             return 1
 
         if args.launch and not args.no_launch:
-            game_id = "aether_gazer"
+            game_id = pack.game_id
             exe_path = user_cfg.game_exe_path(game_id)
             if not exe_path or not Path(exe_path).exists():
-                result = find_aether_gazer(search_drives=user_cfg.search_drives())
+                result = pack.find_game(search_drives=user_cfg.search_drives())
                 if result["game_exe"]:
                     user_cfg.set_game_exe_path(game_id, result["game_exe"])
                     user_cfg.save()
@@ -268,10 +267,10 @@ def _run_cli(app_dir: Path) -> None:
             if not exe_path:
                 logger.error("Cannot launch: game exe not found.")
                 return 1
-            timeout = user_cfg.launch_timeout("aether_gazer")
+            timeout = user_cfg.launch_timeout(pack.game_id)
             if not ensure_game_running(
                 exe_path=exe_path,
-                window_title=user_cfg.window_title("aether_gazer") or "AetherGazer",
+                window_title=user_cfg.window_title(pack.game_id) or pack.window_title,
                 timeout=timeout,
             ):
                 logger.error("Failed to launch game within {t}s", t=timeout)
@@ -296,7 +295,7 @@ def _run_cli(app_dir: Path) -> None:
                 from anime_game_afk.games.aether_gazer.tasks.base import TaskContext
                 ctx = TaskContext(device=device, logger=logger)
                 launch_task = LaunchAndReachHub(
-                    max_popup_attempts=user_cfg.popup_dismiss_max_attempts("aether_gazer"),
+                    max_popup_attempts=user_cfg.popup_dismiss_max_attempts(pack.game_id),
                 )
                 launch_result = await launch_task.execute(ctx)
                 if launch_result.status != "success":

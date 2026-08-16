@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from anime_game_afk.games.content_pack import get_content_pack
 from anime_game_afk.runtime.logger import get_logger
 
 if TYPE_CHECKING:
@@ -83,12 +84,11 @@ def bootstrap_device(
     log = logger or get_logger("bootstrap")
 
     # --- Resolve game exe (with auto-discovery fallback) -------------------
-    window_title = user_cfg.window_title(game_id) or "AetherGazer"
+    pack = get_content_pack(game_id)
+    window_title = user_cfg.window_title(game_id) or pack.window_title
     exe_path = user_cfg.game_exe_path(game_id)
     if not exe_path or not Path(exe_path).exists():
-        from anime_game_afk.core.game_finder import find_aether_gazer
-
-        found = find_aether_gazer(search_drives=user_cfg.search_drives())
+        found = pack.find_game(search_drives=user_cfg.search_drives())
         game_exe = found.get("game_exe")
         launcher = found.get("launcher")
         if game_exe:
@@ -120,9 +120,8 @@ def bootstrap_device(
     # --- Connect to the game window -----------------------------------------
     _status(status_cb, "正在连接游戏...", log)
     from anime_game_afk.core.device import DeviceAdapter
-    from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
 
-    device_config = AETHER_GAZER_CONFIG.to_device_config(game_exe_path=exe_path or "")
+    device_config = pack.config.to_device_config(game_exe_path=exe_path or "")
     device = DeviceAdapter(config=device_config)
     try:
         device.connect()

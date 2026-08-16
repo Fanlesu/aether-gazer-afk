@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from anime_game_afk.games.content_pack import get_content_pack
 from anime_game_afk.runtime.logger import get_logger
 
 logger = get_logger("scheduler")
@@ -41,7 +42,9 @@ class ScheduleConfig:
     enabled: bool = False
     time: str = "04:00"  # HH:MM 24h
     days: list[str] = field(default_factory=list)  # empty = daily
-    pipeline_id: str = "daily_routine"
+    pipeline_id: str = field(
+        default_factory=lambda: get_content_pack().default_pipeline_id
+    )
     retry_on_failure: bool = False
     post_action: str = "exit_app_and_game"  # nothing | exit_app | kill_game | exit_app_and_game
 
@@ -54,7 +57,9 @@ class ScheduleConfig:
             enabled=bool(data.get("enabled", False)),
             time=str(data.get("time", "04:00")),
             days=list(data.get("days", [])),
-            pipeline_id=str(data.get("pipeline_id", "daily_routine")),
+            pipeline_id=str(
+                data.get("pipeline_id", get_content_pack().default_pipeline_id)
+            ),
             retry_on_failure=bool(data.get("retry_on_failure", False)),
             post_action=str(data.get("post_action", "nothing")),
         )

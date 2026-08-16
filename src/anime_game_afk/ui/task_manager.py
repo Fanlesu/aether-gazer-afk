@@ -17,9 +17,11 @@ from typing import Any
 
 # Imports from existing layers (L6, L3, L1) — UI only adds, never modifies
 from anime_game_afk.core.device import DeviceAdapter
-from anime_game_afk.games.aether_gazer.config import AETHER_GAZER_CONFIG
-from anime_game_afk.games.aether_gazer.registry import build_registry
+from anime_game_afk.games.content_pack import get_content_pack
 from anime_game_afk.runtime.logger import get_logger
+
+# Single game-agnostic seam: all AetherGazer specifics come from the pack.
+_PACK = get_content_pack()
 
 
 @dataclass
@@ -55,11 +57,11 @@ _CONFIG_PATH = Path("config/ui_state.json")
 def connect_device() -> DeviceAdapter:
     """Create and connect a :class:`DeviceAdapter` for the AetherGazer window.
 
-    Game-specific (uses ``AETHER_GAZER_CONFIG``). Collapses the repeated
-    import + construct + connect boilerplate at the 4 call sites. Callers
-    own post-connect logic, error handling, and ``disconnect()``.
+    Game-specific (uses the active content pack's ``config``). Collapses the
+    repeated import + construct + connect boilerplate at the 4 call sites.
+    Callers own post-connect logic, error handling, and ``disconnect()``.
     """
-    device = DeviceAdapter(config=AETHER_GAZER_CONFIG.to_device_config())
+    device = DeviceAdapter(config=_PACK.config.to_device_config())
     device.connect()
     return device
 
@@ -139,7 +141,7 @@ class TaskManager:
 
     def _load_pipelines(self) -> None:
         """Discover available pipelines from the shared ProcessRegistry."""
-        registry = build_registry()
+        registry = _PACK.build_registry()
 
         for name in registry.available():
             factory = registry.get_factory(name)
@@ -533,8 +535,8 @@ class TaskManager:
             from anime_game_afk.config.user_config import UserConfig
             cfg = UserConfig.load()
             bindings = cfg.hotkeys()
-            title = cfg.raw.get("games", {}).get("aether_gazer", {}).get(
-                "window_title", "AetherGazer",
+            title = cfg.raw.get("games", {}).get(_PACK.game_id, {}).get(
+                "window_title", _PACK.config.window_title,
             )
         except Exception as exc:  # noqa: BLE001
             self._logger.warning("Hotkey config load failed: {}", exc)
@@ -1204,7 +1206,7 @@ class TaskManager:
             elapsed = time.time() - self._start_time if self._start_time else 0
             append_schedule_log({
                 "timestamp": datetime.now().isoformat(),
-                "pipeline": "daily_routine",
+                "pipeline": _PACK.default_pipeline_id,
                 "result": "success" if success else "failed",
                 "duration_s": round(elapsed, 1),
                 "retried": False,

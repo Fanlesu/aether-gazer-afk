@@ -108,7 +108,7 @@ async def _run(
         ProcessDef,
     )
     from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
-    from anime_game_afk.games.aether_gazer.registry import build_registry
+    from anime_game_afk.games.content_pack import get_content_pack
     from anime_game_afk.runtime.bootstrap import (
         BootstrapError,
         bootstrap_device,
@@ -184,7 +184,8 @@ async def _run(
     listener.on_connected(f"{res.width}x{res.height}")
 
     # ---- Build pipeline ---------------------------------------------------
-    registry = build_registry()
+    pack = get_content_pack()
+    registry = pack.build_registry()
 
     def context_factory(proc_def: ProcessDef) -> ProcessContext:
         return ProcessContext(
@@ -208,7 +209,7 @@ async def _run(
     if plan is not None:  # explicit L1 plan (ordered steps + params)
         config["plan"] = plan
     plan_config = PlanConfig(
-        game="aether_gazer",
+        game=pack.game_id,
         processes=[ProcessDef(name=pipeline_id, config=config)],
     )
 

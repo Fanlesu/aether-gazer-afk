@@ -50,7 +50,7 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
         ProcessDef,
     )
     from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
-    from anime_game_afk.games.aether_gazer.registry import build_registry
+    from anime_game_afk.games.content_pack import get_content_pack
     from anime_game_afk.runtime.bootstrap import (
         BootstrapError,
         bootstrap_device,
@@ -58,7 +58,8 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
 
     start_time = time.monotonic()
     user_cfg = UserConfig.load()
-    game_id = "aether_gazer"
+    pack = get_content_pack()
+    game_id = pack.game_id
 
     # --- Bring up the game device (shared bootstrap) ---
     try:
@@ -90,7 +91,7 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
             return False, f"启动导航失败: {exc}", time.monotonic() - start_time
 
     # --- Execute pipeline ---
-    registry = build_registry()
+    registry = pack.build_registry()
 
     def context_factory(proc_def: ProcessDef) -> ProcessContext:
         return ProcessContext(
@@ -106,7 +107,7 @@ async def _execute_pipeline(config: ScheduleConfig) -> tuple[bool, str, float]:
     )
 
     plan = PlanConfig(
-        game="aether_gazer",
+        game=pack.game_id,
         processes=[ProcessDef(
             name=config.pipeline_id,
             config={"game_was_launched": game_was_launched},
