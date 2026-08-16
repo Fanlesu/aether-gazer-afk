@@ -65,6 +65,13 @@ class Api:
         ok = self._tm.set_all_enabled(pipeline_id, enabled)
         return {"ok": ok}
 
+    def save_plan(
+        self, pipeline_id: str, tasks: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Persist a full user-edited plan (order + enabled + params)."""
+        ok = self._tm.save_plan(pipeline_id, tasks)
+        return {"ok": ok}
+
     # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------

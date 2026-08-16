@@ -90,7 +90,11 @@ def _try_notify(title: str, message: str) -> None:
 # Async main loop
 # ---------------------------------------------------------------------------
 
-async def _run(pipeline_id: str, enabled_ids: set[str]) -> int:
+async def _run(
+    pipeline_id: str,
+    enabled_ids: set[str],
+    plan: list | None = None,
+) -> int:
     """Execute the requested pipeline and stream status to stdout.
 
     Returns:
@@ -246,20 +250,20 @@ async def _run(pipeline_id: str, enabled_ids: set[str]) -> int:
     )
 
     # ---- Build plan from CLI args -----------------------------------------
-    plan = PlanConfig(
+    config: dict[str, Any] = {
+        "enabled_tasks": sorted(enabled_ids),
+        "game_was_launched": not game_process_running,
+    }
+    if plan is not None:  # explicit L1 plan (ordered steps + params)
+        config["plan"] = plan
+    plan_config = PlanConfig(
         game="aether_gazer",
-        processes=[ProcessDef(
-            name=pipeline_id,
-            config={
-                "enabled_tasks": sorted(enabled_ids),
-                "game_was_launched": not game_process_running,
-            },
-        )],
+        processes=[ProcessDef(name=pipeline_id, config=config)],
     )
 
     # ---- Execute ----------------------------------------------------------
     try:
-        result = await pipeline.run(plan)
+        result = await pipeline.run(plan_config)
     except Exception as exc:
         _emit({"type": "error", "msg": f"Pipeline error: {exc}"})
         if notify_on_complete:
@@ -348,12 +352,19 @@ def main() -> None:
         required=True,
         help="Comma-separated list of enabled task IDs",
     )
+    parser.add_argument(
+        "--plan",
+        required=False,
+        default=None,
+        help="JSON plan: ordered steps with per-task enabled/params",
+    )
     args = parser.parse_args()
 
     enabled_ids = {t.strip() for t in args.tasks.split(",") if t.strip()}
+    plan_arg = json.loads(args.plan) if args.plan else None
 
     try:
-        exit_code = asyncio.run(_run(args.pipeline, enabled_ids))
+        exit_code = asyncio.run(_run(args.pipeline, enabled_ids, plan_arg))
     except Exception as exc:
         traceback.print_exc(file=sys.stderr)
         _emit({"type": "error", "msg": f"Fatal: {exc}"})

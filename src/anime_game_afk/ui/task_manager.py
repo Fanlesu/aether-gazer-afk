@@ -32,6 +32,7 @@ class TaskState:
     enabled: bool = True
     safe: bool = True
     status: str = "pending"  # pending | running | success | failed | skipped
+    params: dict[str, Any] = field(default_factory=dict)  # L1 plan knobs
 
 
 @dataclass
@@ -131,7 +132,12 @@ class TaskManager:
     # ------------------------------------------------------------------
 
     def _load_config(self) -> None:
-        """Load task enabled/disabled state from config file."""
+        """Load task order/enabled/params state from config file.
+
+        Backward compatible: a legacy ``tasks`` map of ``id -> bool`` is
+        treated as ``{enabled: bool, params: {}}``. A missing ``order``
+        keeps the discovery (task_defs) order.
+        """
         if not _CONFIG_PATH.exists():
             return
         try:
@@ -144,16 +150,33 @@ class TaskManager:
         for pipeline in self._pipelines:
             pcfg = pipelines_cfg.get(pipeline.id, {})
             tasks_cfg = pcfg.get("tasks", {})
+            order = pcfg.get("order")
+            if order:
+                ordered = [t for tid in order for t in pipeline.tasks
+                           if t.id == tid]
+                rest = [t for t in pipeline.tasks if t.id not in order]
+                pipeline.tasks = ordered + rest
             for task in pipeline.tasks:
-                if task.id in tasks_cfg:
-                    task.enabled = bool(tasks_cfg[task.id])
+                if task.id not in tasks_cfg:
+                    continue
+                entry = tasks_cfg[task.id]
+                if isinstance(entry, bool):
+                    task.enabled = entry
+                    task.params = {}
+                else:
+                    task.enabled = bool(entry.get("enabled", True))
+                    task.params = entry.get("params") or {}
 
     def _save_config(self) -> None:
-        """Save task enabled/disabled state to config file (atomic write)."""
+        """Save task order/enabled/params to config file (atomic write)."""
         data: dict[str, Any] = {"pipelines": {}}
         for pipeline in self._pipelines:
             data["pipelines"][pipeline.id] = {
-                "tasks": {t.id: t.enabled for t in pipeline.tasks}
+                "order": [t.id for t in pipeline.tasks],
+                "tasks": {
+                    t.id: {"enabled": t.enabled, "params": t.params or {}}
+                    for t in pipeline.tasks
+                },
             }
 
         _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +205,7 @@ class TaskManager:
                             "enabled": t.enabled,
                             "safe": t.safe,
                             "status": t.status,
+                            "params": t.params,
                         }
                         for t in p.tasks
                     ],
@@ -212,6 +236,38 @@ class TaskManager:
                 return False
             for task in pipeline.tasks:
                 task.enabled = enabled
+            self._save_config()
+        return True
+
+    def save_plan(self, pipeline_id: str, tasks: list[dict[str, Any]]) -> bool:
+        """Persist a full user-edited plan (order + enabled + params).
+
+        ``tasks`` is the complete, ordered list of task entries as edited
+        in the UI: ``[{"id", "enabled", "params"}, ...]``. Unknown ids are
+        ignored; ``safe`` tasks are forced enabled (mirrors the engine's
+        protection so the persisted config can never disable a task that
+        spends currency/resources).
+        """
+        with self._lock:
+            pipeline = self._find_pipeline(pipeline_id)
+            if not pipeline:
+                return False
+            known = {t.id: t for t in pipeline.tasks}
+            new_tasks: list[TaskState] = []
+            for entry in tasks:
+                tid = entry.get("id")
+                if tid not in known:
+                    continue
+                state = known[tid]
+                state.enabled = bool(entry.get("enabled", True))
+                if state.safe and not state.enabled:
+                    state.enabled = True
+                state.params = entry.get("params") or {}
+                # keep the same TaskState object, just reorder the list
+                new_tasks.append(state)
+            if not new_tasks:
+                return False
+            pipeline.tasks = new_tasks
             self._save_config()
         return True
 
@@ -467,6 +523,15 @@ class TaskManager:
         tasks_arg = ",".join(enabled) if enabled else "_all_"
         enabled_ids = set(enabled)
 
+        # L1 plan: ordered steps with per-task params, passed as JSON to the
+        # worker (which feeds it into ctx.config["plan"]). Kept independent of
+        # --tasks so the engine receives order + params, not just a name set.
+        plan_arg = [
+            {"id": t.id, "enabled": t.enabled, "params": t.params or {}}
+            for t in pipeline.tasks
+        ]
+        plan_json = json.dumps(plan_arg, ensure_ascii=False)
+
         self._running = True
         self._stop_requested = False
         self._start_time = time.time()
@@ -479,12 +544,12 @@ class TaskManager:
             env["_MEIPASS"] = str(sys._MEIPASS)  # type: ignore[attr-defined]
             cmd = [sys.executable, "--worker",
                    "--pipeline", pipeline_id,
-                   "--tasks", tasks_arg]
+                   "--tasks", tasks_arg, "--plan", plan_json]
         else:
             env = None
             cmd = [sys.executable, "-m", "anime_game_afk.ui.worker",
                    "--pipeline", pipeline_id,
-                   "--tasks", tasks_arg]
+                   "--tasks", tasks_arg, "--plan", plan_json]
 
         # Hide console window on Windows
         creationflags = 0
