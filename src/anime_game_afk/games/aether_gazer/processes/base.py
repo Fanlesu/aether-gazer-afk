@@ -28,6 +28,9 @@ class ProcessContext(TaskContext):
     """Extended context for processes. Adds process-level config and listener."""
     config: dict[str, Any] = field(default_factory=dict)
     listener: PipelineListener | None = None
+    # Run-local key/value store shared between steps (L2 value conditions,
+    # future cross-step data). Read/written by tasks and condition resolvers.
+    state: dict[str, Any] = field(default_factory=dict)
 
     def notify_task(self, task_id: str, status: str, message: str = "") -> None:
         """Fire a task status event if a listener is attached."""

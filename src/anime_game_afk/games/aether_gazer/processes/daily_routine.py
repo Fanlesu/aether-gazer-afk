@@ -17,6 +17,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from anime_game_afk.games.aether_gazer.orchestrator.conditions import (
+    resolve_condition,
+)
 from anime_game_afk.games.aether_gazer.orchestrator.engine import (
     PlanStep,
     TaskEngine,
@@ -93,6 +96,7 @@ class DailyRoutine:
             _REGISTRY,
             inter_step=self._hub.execute,
             should_skip=self._should_skip,
+            resolve_condition=resolve_condition,
         )
 
     @classmethod

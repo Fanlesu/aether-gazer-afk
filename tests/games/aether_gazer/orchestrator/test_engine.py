@@ -13,10 +13,8 @@ from unittest.mock import AsyncMock
 import numpy as np
 
 from anime_game_afk.games.aether_gazer.orchestrator.engine import (
-    PlanStep,
     TaskEngine,
     TaskMeta,
-    TaskParams,
 )
 from anime_game_afk.games.aether_gazer.processes.base import ProcessContext
 from anime_game_afk.games.aether_gazer.tasks.base import TaskResult
@@ -197,3 +195,121 @@ def test_run_timeout_fails_task():
                                                 "params": {"timeout": 0.1}}])))
     assert result.status == "failed"
     assert "fight" in result.data["failed"]
+
+
+# --- L2: conditions + control flow -------------------------------------
+
+
+def test_build_plan_parses_groups():
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = engine.build_plan({"plan": [
+        {"id": "mail"},
+        {"type": "group", "name": "g", "repeat": 2,
+         "steps": [{"id": "intel"}, {"id": "fight"}]},
+    ]})
+    from anime_game_afk.games.aether_gazer.orchestrator.engine import PlanGroup
+    assert plan[0].task_id == "mail"
+    assert isinstance(plan[1], PlanGroup)
+    assert plan[1].repeat == 2
+    assert [s.task_id for s in plan[1].steps] == ["intel", "fight"]
+
+
+def test_run_condition_skip_when_resolver_false():
+    reg = _registry()
+
+    async def resolver(cond, ctx):
+        # block any step whose condition carries gate == "block"
+        return cond.get("gate") != "block"
+
+    engine = TaskEngine(
+        reg,
+        resolve_condition=resolver,
+    )
+    plan = [
+        {"id": "mail", "condition": {"gate": "block"}},
+        {"id": "intel"},
+    ]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "success"
+    completed = [c.split("(")[0] for c in result.data["completed"]]
+    assert "mail" not in completed
+    assert "intel" in completed
+
+
+def test_run_condition_ignored_without_resolver():
+    """Backward compat: no resolver wired -> conditions are no-ops."""
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = [{"id": "mail", "condition": {"gate": "block"}}]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "success"
+    assert "mail" in [c.split("(")[0] for c in result.data["completed"]]
+
+
+def test_run_group_repeats_steps():
+    reg = _registry()
+    mail = reg["mail"].cls
+    engine = TaskEngine(reg)
+    plan = [{"type": "group", "name": "g", "repeat": 3,
+             "steps": [{"id": "mail"}]}]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "success"
+    assert mail.execute.call_count == 3
+
+
+def test_run_on_fail_abort_stops_run():
+    reg = _registry()
+    fight = reg["fight"].cls
+    fight.can_run = AsyncMock(return_value=True)
+    fight.execute = AsyncMock(
+        return_value=TaskResult(status="failed", message="boom")
+    )
+    mail = reg["mail"].cls
+    engine = TaskEngine(reg)
+    plan = [
+        {"id": "fight", "on_fail": "abort"},
+        {"id": "mail"},
+    ]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "failed"
+    assert result.data["aborted"] is True
+    # mail must NOT run after abort
+    assert mail.execute.call_count == 0
+
+
+def test_run_on_fail_skip_continues_by_default():
+    reg = _registry()
+    fight = reg["fight"].cls
+    fight.can_run = AsyncMock(return_value=True)
+    fight.execute = AsyncMock(
+        return_value=TaskResult(status="failed", message="boom")
+    )
+    mail = reg["mail"].cls
+    engine = TaskEngine(reg)
+    plan = [{"id": "fight"}, {"id": "mail"}]  # on_fail defaults to skip
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "failed"  # fight failed
+    assert mail.execute.call_count == 1  # but mail still ran
+
+
+def test_run_nested_group_and_abort_propagates():
+    reg = _registry()
+    intel = reg["intel"].cls
+    intel.can_run = AsyncMock(return_value=True)
+    intel.execute = AsyncMock(
+        return_value=TaskResult(status="failed", message="boom")
+    )
+    mail = reg["mail"].cls
+    engine = TaskEngine(reg)
+    plan = [{
+        "type": "group", "name": "outer", "repeat": 1,
+        "steps": [
+            {"type": "group", "name": "inner",
+             "steps": [{"id": "intel", "on_fail": "abort"}]},
+            {"id": "mail"},
+        ],
+    }]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.data["aborted"] is True
+    assert mail.execute.call_count == 0

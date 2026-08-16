@@ -3,8 +3,9 @@
 A small, reusable engine that runs an ordered list of tasks (a "plan")
 for a single process. It is deliberately kept separate from any concrete
 process so that every process that *composes* tasks shares one execution
-model: ordered steps, per-task timeout/retry/wait knobs, an optional
-inter-step callback (e.g. return-to-hub), and status notification.
+model: ordered steps, per-task timeout/retry/wait knobs, optional
+conditions and control flow (L2), an optional inter-step callback
+(e.g. return-to-hub), and status notification.
 
 This mirrors the MaaFramework / MAG ``interface.json`` convention — a
 declarative task registry (id -> metadata) plus an ordered step list,
@@ -14,6 +15,20 @@ open/closed: adding a task never touches the engine).
 The engine depends only on the ``Task`` protocol and ``ProcessContext``,
 so it is reused unchanged by any process in this game (and, conceptually,
 by any content pack that supplies a registry).
+
+L2 extensions (conditions + control flow)
+-----------------------------------------
+A plan item is either a :class:`PlanStep` (one task) or a
+:class:`PlanGroup` (a named sequence that may repeat). Both may carry:
+
+* ``condition`` — a user condition (``{"type": "reddot", ...}``) evaluated
+  by the ``resolve_condition`` callback. When it resolves falsy the item is
+  skipped. The callback is game-specific (red dot / OCR / value), supplied
+  by the owning process, so the engine itself stays game-agnostic.
+* ``on_fail`` — ``"skip"`` (continue, default) or ``"abort"`` (stop the
+  whole run on failure).
+
+A :class:`PlanGroup` may additionally repeat its steps ``repeat`` times.
 """
 from __future__ import annotations
 
@@ -53,11 +68,13 @@ class TaskParams:
 
 @dataclass
 class PlanStep:
-    """One step in a user plan."""
+    """One task step in a user plan (L1), with optional L2 gates."""
 
     task_id: str
     enabled: bool = True
     params: TaskParams = field(default_factory=TaskParams)
+    condition: dict | None = None     # L2: when-gate; resolved via callback
+    on_fail: str = "skip"             # L2: "skip" | "abort"
 
     @classmethod
     def from_dict(cls, data) -> PlanStep:
@@ -67,7 +84,37 @@ class PlanStep:
             task_id=data["id"],
             enabled=bool(data.get("enabled", True)),
             params=TaskParams.from_dict(data.get("params")),
+            condition=data.get("condition"),
+            on_fail=data.get("on_fail", "skip"),
         )
+
+
+@dataclass
+class PlanGroup:
+    """A named sequence of steps that may repeat (L2 control flow)."""
+
+    steps: list[PlanItem]
+    name: str = ""
+    repeat: int = 1                   # loop count; 1 = run once
+    condition: dict | None = None     # L2: when-gate for the whole group
+    on_fail: str = "skip"             # L2: "skip" | "abort"
+    enabled: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PlanGroup:
+        items = [TaskEngine._parse_item(e) for e in data.get("steps", [])]
+        return cls(
+            steps=items,
+            name=data.get("name", ""),
+            repeat=int(data.get("repeat", 1) or 1),
+            condition=data.get("condition"),
+            on_fail=data.get("on_fail", "skip"),
+            enabled=bool(data.get("enabled", True)),
+        )
+
+
+# A plan item is either a single task step or a (possibly repeating) group.
+PlanItem = PlanStep | PlanGroup
 
 
 @dataclass
@@ -82,6 +129,8 @@ class TaskMeta:
 # Hook signatures (annotations only — not evaluated at runtime).
 InterStep = Callable[[ProcessContext], Awaitable[None]]
 ShouldSkip = Callable[["PlanStep", ProcessContext], "str | None"]
+# Condition resolver: given a condition dict + context, return truthiness.
+ResolveCondition = Callable[[dict, ProcessContext], Awaitable[bool]]
 
 
 class TaskEngine:
@@ -96,6 +145,9 @@ class TaskEngine:
         should_skip: Optional predicate ``(step, ctx) -> reason | None``.
             When it returns a truthy reason the step is skipped (with that
             reason in the status message) instead of being executed.
+        resolve_condition: Optional async ``(condition, ctx) -> bool`` invoked
+            for each item's ``condition`` gate. Game-specific (red dot / OCR /
+            value); when omitted, conditions are ignored (backward compatible).
     """
 
     def __init__(
@@ -104,16 +156,29 @@ class TaskEngine:
         *,
         inter_step: InterStep | None = None,
         should_skip: ShouldSkip | None = None,
+        resolve_condition: ResolveCondition | None = None,
     ) -> None:
         self._registry = registry
         self._inter_step = inter_step
         self._should_skip = should_skip
+        self._resolve_condition = resolve_condition
 
     # ------------------------------------------------------------------
     # Plan resolution
     # ------------------------------------------------------------------
 
-    def build_plan(self, config: dict[str, Any]) -> list[PlanStep]:
+    @staticmethod
+    def _parse_item(data) -> PlanItem:
+        """Coerce a raw plan entry into a PlanStep or PlanGroup."""
+        if isinstance(data, str):
+            return PlanStep(task_id=data, enabled=True)
+        if isinstance(data, dict):
+            if data.get("type") == "group":
+                return PlanGroup.from_dict(data)
+            return PlanStep.from_dict(data)
+        raise TypeError(f"unsupported plan item: {data!r}")
+
+    def build_plan(self, config: dict[str, Any]) -> list[PlanItem]:
         """Resolve the ordered, enabled plan for this run.
 
         Priority: explicit ``config["plan"]`` (ordered step list) >
@@ -128,12 +193,13 @@ class TaskEngine:
         """
         raw = config.get("plan")
         if raw:
-            steps = [PlanStep.from_dict(e) for e in raw]
+            steps = [self._parse_item(e) for e in raw]
             # safe tasks may not be disabled via an explicit user plan
             for step in steps:
-                meta = self._registry.get(step.task_id)
-                if meta is not None and meta.safe and not step.enabled:
-                    step.enabled = True
+                if isinstance(step, PlanStep) and not step.enabled:
+                    meta = self._registry.get(step.task_id)
+                    if meta is not None and meta.safe and not step.enabled:
+                        step.enabled = True
         elif "enabled_tasks" in config:
             enabled = set(config["enabled_tasks"])
             steps = [
@@ -144,7 +210,12 @@ class TaskEngine:
             steps = [PlanStep(tid) for tid in self._registry]
 
         # Drop unknown task ids (defensive — a stale config should not crash)
-        return [s for s in steps if s.task_id in self._registry]
+        return [s for s in steps if self._eligible(s)]
+
+    def _eligible(self, item: PlanItem) -> bool:
+        if isinstance(item, PlanGroup):
+            return all(self._eligible(s) for s in item.steps)
+        return item.task_id in self._registry
 
     # ------------------------------------------------------------------
     # Execution
@@ -157,76 +228,13 @@ class TaskEngine:
         plan = self.build_plan(ctx.config)
         total = len(plan)
 
-        for i, step in enumerate(plan):
-            task_id = step.task_id
-            cls = self._registry[task_id].cls
-
-            if not step.enabled:
-                ctx.notify_task(task_id, "skipped", "disabled by user")
-                ctx.logger.info(f"  {task_id}: skipped (disabled)")
-                continue
-
-            reason = self._should_skip(step, ctx) if self._should_skip else None
-            if reason:
-                ctx.notify_task(task_id, "skipped", reason)
-                ctx.logger.info(f"  {task_id}: skipped ({reason})")
-                if self._inter_step:
-                    await self._inter_step(ctx)
-                continue
-
-            ctx.logger.info(f"--- task {i+1}/{total} — {task_id} ---")
-            ctx.notify_task(task_id, "running")
-            task_t0 = time.monotonic()
-            try:
-                if step.params.wait_before:
-                    await asyncio.sleep(step.params.wait_before)
-
-                task = cls()
-                if await task.can_run(ctx):
-                    result = await self._run_task(task, ctx, step.params)
-                    elapsed = time.monotonic() - task_t0
-                    if result.status == "success":
-                        summary = self._summarize(task_id, result)
-                        completed.append(summary)
-                        ctx.notify_task(task_id, "success", result.message)
-                        ctx.logger.info(
-                            f"  {task_id}: success ({elapsed:.1f}s)"
-                        )
-                    elif result.status == "skipped":
-                        completed.append(f"{task_id}(skipped)")
-                        ctx.notify_task(task_id, "skipped", result.message)
-                        ctx.logger.info(
-                            f"  {task_id}: skipped — {result.message} "
-                            f"({elapsed:.1f}s)"
-                        )
-                    else:
-                        failed.append(task_id)
-                        ctx.notify_task(task_id, "failed", result.message)
-                        ctx.logger.warning(
-                            f"  {task_id}: {result.status} — {result.message} "
-                            f"({elapsed:.1f}s)"
-                        )
-                else:
-                    elapsed = time.monotonic() - task_t0
-                    ctx.notify_task(task_id, "skipped", "can_run=False")
-                    ctx.logger.info(
-                        f"  {task_id}: can_run=False, skipping "
-                        f"({elapsed:.1f}s)"
-                    )
-            except Exception as exc:
-                elapsed = time.monotonic() - task_t0
-                failed.append(task_id)
-                ctx.notify_task(task_id, "failed", str(exc))
-                ctx.logger.error(
-                    f"  {task_id}: crashed — {exc} ({elapsed:.1f}s)"
-                )
-
-            if step.params.wait_after:
-                await asyncio.sleep(step.params.wait_after)
-
-            # Return to hub (or any inter-step hook) between tasks.
-            if self._inter_step:
-                await self._inter_step(ctx)
+        aborted = False
+        for i, item in enumerate(plan):
+            ctx.logger.info(f"--- step {i+1}/{total} ---")
+            if await self._run_item(item, ctx, completed, failed) == "abort":
+                aborted = True
+                ctx.logger.warning("engine aborted by on_fail=abort")
+                break
 
         total_elapsed = time.monotonic() - routine_t0
         ctx.logger.info(
@@ -240,15 +248,144 @@ class TaskEngine:
         # breakage during debugging (the pipeline would log "1/1 succeeded"
         # while tasks silently failed).
         return ProcessResult(
-            status="success" if not failed else "failed",
+            status="success" if not failed and not aborted else "failed",
             message=(
                 f"{len(completed)} done, {len(failed)} failed: "
                 f"{', '.join(failed)}"
                 if failed
                 else f"{len(completed)} tasks completed"
             ),
-            data={"completed": completed, "failed": failed},
+            data={"completed": completed, "failed": failed, "aborted": aborted},
         )
+
+    async def _run_item(
+        self,
+        item: PlanItem,
+        ctx: ProcessContext,
+        completed: list[str],
+        failed: list[str],
+    ) -> str | None:
+        """Execute one plan item (step or group). Return "abort" to halt run.
+
+        Handles the shared L2 gates (enabled / condition) before delegating
+        to the concrete task runner or recursing into a group.
+        """
+        # ---- shared gates ----
+        if not item.enabled:
+            return None
+        if getattr(item, "condition", None):
+            if not await self._resolve(item.condition, ctx, item):
+                label = getattr(item, "task_id", None) or getattr(
+                    item, "name", "group"
+                )
+                ctx.notify_task(label, "skipped", "condition not met")
+                ctx.logger.info(f"  {label}: skipped (condition not met)")
+                return None
+
+        # ---- group: recurse, optionally repeating ----
+        if isinstance(item, PlanGroup):
+            for _ in range(max(1, item.repeat)):
+                for sub in item.steps:
+                    if (
+                        await self._run_item(sub, ctx, completed, failed)
+                        == "abort"
+                    ):
+                        return "abort"
+            return None
+
+        # ---- single task step ----
+        return await self._run_step(item, ctx, completed, failed)
+
+    async def _resolve(
+        self, condition: dict, ctx: ProcessContext, item: PlanItem
+    ) -> bool:
+        """Evaluate a condition via the (optional) resolver callback."""
+        if self._resolve_condition is None:
+            return True  # no resolver wired -> conditions are no-ops (compat)
+        try:
+            return bool(await self._resolve_condition(condition, ctx))
+        except Exception as exc:  # resolver bug must not crash the run
+            label = getattr(item, "task_id", None) or getattr(item, "name", "?")
+            ctx.logger.warning(
+                f"  condition for {label} errored ({exc}); treating as unmet"
+            )
+            return False
+
+    async def _run_step(
+        self,
+        step: PlanStep,
+        ctx: ProcessContext,
+        completed: list[str],
+        failed: list[str],
+    ) -> str | None:
+        task_id = step.task_id
+        cls = self._registry[task_id].cls
+
+        reason = self._should_skip(step, ctx) if self._should_skip else None
+        if reason:
+            ctx.notify_task(task_id, "skipped", reason)
+            ctx.logger.info(f"  {task_id}: skipped ({reason})")
+            if self._inter_step:
+                await self._inter_step(ctx)
+            return None
+
+        ctx.notify_task(task_id, "running")
+        task_t0 = time.monotonic()
+        try:
+            if step.params.wait_before:
+                await asyncio.sleep(step.params.wait_before)
+
+            task = cls()
+            if await task.can_run(ctx):
+                result = await self._run_task(task, ctx, step.params)
+                elapsed = time.monotonic() - task_t0
+                if result.status == "success":
+                    summary = self._summarize(task_id, result)
+                    completed.append(summary)
+                    ctx.notify_task(task_id, "success", result.message)
+                    ctx.logger.info(
+                        f"  {task_id}: success ({elapsed:.1f}s)"
+                    )
+                elif result.status == "skipped":
+                    completed.append(f"{task_id}(skipped)")
+                    ctx.notify_task(task_id, "skipped", result.message)
+                    ctx.logger.info(
+                        f"  {task_id}: skipped — {result.message} "
+                        f"({elapsed:.1f}s)"
+                    )
+                else:
+                    failed.append(task_id)
+                    ctx.notify_task(task_id, "failed", result.message)
+                    ctx.logger.warning(
+                        f"  {task_id}: {result.status} — {result.message} "
+                        f"({elapsed:.1f}s)"
+                    )
+                    if step.on_fail == "abort":
+                        return "abort"
+            else:
+                elapsed = time.monotonic() - task_t0
+                ctx.notify_task(task_id, "skipped", "can_run=False")
+                ctx.logger.info(
+                    f"  {task_id}: can_run=False, skipping "
+                    f"({elapsed:.1f}s)"
+                )
+        except Exception as exc:
+            elapsed = time.monotonic() - task_t0
+            failed.append(task_id)
+            ctx.notify_task(task_id, "failed", str(exc))
+            ctx.logger.error(
+                f"  {task_id}: crashed — {exc} ({elapsed:.1f}s)"
+            )
+            if step.on_fail == "abort":
+                return "abort"
+
+        if step.params.wait_after:
+            await asyncio.sleep(step.params.wait_after)
+
+        # Return to hub (or any inter-step hook) between tasks.
+        if self._inter_step:
+            await self._inter_step(ctx)
+        return None
 
     # ------------------------------------------------------------------
     # Helpers
