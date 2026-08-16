@@ -33,6 +33,8 @@ class TaskState:
     safe: bool = True
     status: str = "pending"  # pending | running | success | failed | skipped
     params: dict[str, Any] = field(default_factory=dict)  # L1 plan knobs
+    condition: dict | None = None   # L2: when-gate (reddot/ocr/value)
+    on_fail: str = "skip"           # L2: "skip" | "abort"
 
 
 @dataclass
@@ -178,6 +180,8 @@ class TaskManager:
                 else:
                     task.enabled = bool(entry.get("enabled", True))
                     task.params = entry.get("params") or {}
+                    task.condition = entry.get("condition")
+                    task.on_fail = entry.get("on_fail", "skip")
 
     def _save_config(self) -> None:
         """Save task order/enabled/params to config file (atomic write)."""
@@ -185,10 +189,15 @@ class TaskManager:
         for pipeline in self._pipelines:
             data["pipelines"][pipeline.id] = {
                 "order": [t.id for t in pipeline.tasks],
-                "tasks": {
-                    t.id: {"enabled": t.enabled, "params": t.params or {}}
-                    for t in pipeline.tasks
-                },
+            "tasks": {
+                t.id: {
+                    "enabled": t.enabled,
+                    "params": t.params or {},
+                    "condition": t.condition,
+                    "on_fail": t.on_fail,
+                }
+                for t in pipeline.tasks
+            },
             }
 
         _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -218,6 +227,8 @@ class TaskManager:
                             "safe": t.safe,
                             "status": t.status,
                             "params": t.params,
+                            "condition": t.condition,
+                            "on_fail": t.on_fail,
                         }
                         for t in p.tasks
                     ],
@@ -252,13 +263,14 @@ class TaskManager:
         return True
 
     def save_plan(self, pipeline_id: str, tasks: list[dict[str, Any]]) -> bool:
-        """Persist a full user-edited plan (order + enabled + params).
+        """Persist a full user-edited plan (order + enabled + params + L2).
 
         ``tasks`` is the complete, ordered list of task entries as edited
-        in the UI: ``[{"id", "enabled", "params"}, ...]``. Unknown ids are
-        ignored; ``safe`` tasks are forced enabled (mirrors the engine's
-        protection so the persisted config can never disable a task that
-        spends currency/resources).
+        in the UI: ``[{"id", "enabled", "params", "condition", "on_fail"},
+        ...]``. Unknown ids are ignored; ``safe`` tasks are forced enabled
+        (mirrors the engine's protection so the persisted config can never
+        disable a task that spends currency/resources). ``condition`` and
+        ``on_fail`` are passed through as-is (the engine validates them).
         """
         with self._lock:
             pipeline = self._find_pipeline(pipeline_id)
@@ -275,6 +287,9 @@ class TaskManager:
                 if state.safe and not state.enabled:
                     state.enabled = True
                 state.params = entry.get("params") or {}
+                # L2: condition gate + failure policy (validated by engine)
+                state.condition = entry.get("condition")
+                state.on_fail = entry.get("on_fail", "skip")
                 # keep the same TaskState object, just reorder the list
                 new_tasks.append(state)
             if not new_tasks:
@@ -528,7 +543,13 @@ class TaskManager:
         # worker (which feeds it into ctx.config["plan"]). Kept independent of
         # --tasks so the engine receives order + params, not just a name set.
         plan_arg = [
-            {"id": t.id, "enabled": t.enabled, "params": t.params or {}}
+            {
+                "id": t.id,
+                "enabled": t.enabled,
+                "params": t.params or {},
+                "condition": t.condition,
+                "on_fail": t.on_fail,
+            }
             for t in pipeline.tasks
         ]
         plan_json = json.dumps(plan_arg, ensure_ascii=False)
