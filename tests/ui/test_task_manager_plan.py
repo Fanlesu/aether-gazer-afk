@@ -119,3 +119,65 @@ def test_save_plan_writes_config_file(mgr, tmp_path: Path) -> None:
     data = json.loads(cfg.read_text(encoding="utf-8"))
     assert "daily_routine" in data["pipelines"]
     assert data["pipelines"]["daily_routine"]["order"] == ["mail"]
+
+
+# --- L3: custom atomic steps ------------------------------------------
+
+
+def test_save_plan_creates_custom_step(mgr) -> None:
+    plan = [
+        {"id": "mail", "enabled": True, "params": {}},
+        {
+            "id": "custom_1", "enabled": True, "name": "自定义点按",
+            "description": "自定义步骤", "params": {},
+            "actions": [
+                {"type": "click", "x": 0.5, "y": 0.5},
+                {"type": "wait", "seconds": 1},
+            ],
+        },
+        {"id": "ghost", "enabled": True, "params": {}},  # no actions -> dropped
+    ]
+    assert mgr.save_plan("daily_routine", plan) is True
+    tasks = {t.id: t for t in mgr._pipelines[0].tasks}
+    assert "custom_1" in tasks
+    assert tasks["custom_1"].actions == [
+        {"type": "click", "x": 0.5, "y": 0.5},
+        {"type": "wait", "seconds": 1},
+    ]
+    assert tasks["custom_1"].safe is False
+    assert "ghost" not in tasks
+    assert _ids(mgr) == ["mail", "custom_1"]
+
+
+def test_save_plan_roundtrip_custom_step(mgr, tmp_path: Path) -> None:
+    plan = [
+        {
+            "id": "custom_1", "enabled": True, "name": "自定义点按",
+            "params": {}, "actions": [{"type": "wait", "seconds": 2}],
+        },
+    ]
+    assert mgr.save_plan("daily_routine", plan) is True
+    mgr2 = _make_manager()
+    with patch.object(tm_mod, "_CONFIG_PATH", tmp_path / "ui_state.json"):
+        mgr2._load_config()
+    tasks = {t.id: t for t in mgr2._pipelines[0].tasks}
+    assert "custom_1" in tasks
+    assert tasks["custom_1"].actions == [{"type": "wait", "seconds": 2}]
+    assert tasks["custom_1"].name == "自定义点按"
+
+
+def test_get_pipelines_includes_actions(mgr) -> None:
+    plan = [
+        {"id": "mail", "enabled": True, "params": {}},
+        {
+            "id": "custom_1", "enabled": True, "params": {},
+            "actions": [{"type": "click", "x": 0.1, "y": 0.2}],
+        },
+    ]
+    mgr.save_plan("daily_routine", plan)
+    pipelines = mgr.get_pipelines()
+    tasks = {t["id"]: t for p in pipelines for t in p["tasks"]}
+    assert tasks["custom_1"]["actions"] == [
+        {"type": "click", "x": 0.1, "y": 0.2}
+    ]
+    assert tasks["mail"]["actions"] is None

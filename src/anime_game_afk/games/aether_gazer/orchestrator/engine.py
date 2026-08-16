@@ -75,6 +75,7 @@ class PlanStep:
     params: TaskParams = field(default_factory=TaskParams)
     condition: dict | None = None     # L2: when-gate; resolved via callback
     on_fail: str = "skip"             # L2: "skip" | "abort"
+    actions: list[dict] | None = None  # L3: custom atomic-action sequence
 
     @classmethod
     def from_dict(cls, data) -> PlanStep:
@@ -86,6 +87,7 @@ class PlanStep:
             params=TaskParams.from_dict(data.get("params")),
             condition=data.get("condition"),
             on_fail=data.get("on_fail", "skip"),
+            actions=data.get("actions"),
         )
 
 
@@ -131,6 +133,8 @@ InterStep = Callable[[ProcessContext], Awaitable[None]]
 ShouldSkip = Callable[["PlanStep", ProcessContext], "str | None"]
 # Condition resolver: given a condition dict + context, return truthiness.
 ResolveCondition = Callable[[dict, ProcessContext], Awaitable[bool]]
+# Action executor: given an action dict + context, run it; return success.
+ActionExecutor = Callable[[dict, ProcessContext], Awaitable[bool]]
 
 
 class TaskEngine:
@@ -157,11 +161,13 @@ class TaskEngine:
         inter_step: InterStep | None = None,
         should_skip: ShouldSkip | None = None,
         resolve_condition: ResolveCondition | None = None,
+        action_executor: ActionExecutor | None = None,
     ) -> None:
         self._registry = registry
         self._inter_step = inter_step
         self._should_skip = should_skip
         self._resolve_condition = resolve_condition
+        self._action_executor = action_executor
 
     # ------------------------------------------------------------------
     # Plan resolution
@@ -215,6 +221,9 @@ class TaskEngine:
     def _eligible(self, item: PlanItem) -> bool:
         if isinstance(item, PlanGroup):
             return all(self._eligible(s) for s in item.steps)
+        # L3 custom atomic steps carry their own actions, not a registry id.
+        if getattr(item, "actions", None):
+            return True
         return item.task_id in self._registry
 
     # ------------------------------------------------------------------
@@ -318,6 +327,9 @@ class TaskEngine:
         completed: list[str],
         failed: list[str],
     ) -> str | None:
+        # L3: a custom atomic-action sequence runs instead of a built-in task.
+        if step.actions:
+            return await self._run_actions(step, ctx, completed, failed)
         task_id = step.task_id
         cls = self._registry[task_id].cls
 
@@ -383,6 +395,55 @@ class TaskEngine:
             await asyncio.sleep(step.params.wait_after)
 
         # Return to hub (or any inter-step hook) between tasks.
+        if self._inter_step:
+            await self._inter_step(ctx)
+        return None
+
+    async def _run_actions(
+        self,
+        step: PlanStep,
+        ctx: ProcessContext,
+        completed: list[str],
+        failed: list[str],
+    ) -> str | None:
+        """Run a custom L3 atomic-action sequence (no built-in task lookup).
+
+        Each action is delegated to the wired ``action_executor`` callback and
+        is expected to return a truthy value when satisfied. A ``*_wait``
+        action returns falsy on timeout. The first falsy result stops the
+        sequence early; whether that aborts the whole run depends on the
+        step's ``on_fail`` policy.
+        """
+        label = step.task_id
+        ctx.notify_task(label, "running")
+        ctx.logger.info(
+            f"  {label}: running {len(step.actions)} custom action(s)"
+        )
+        ok = True
+        for act in step.actions:
+            if self._action_executor is None:
+                ctx.logger.warning(
+                    f"  {label}: no action_executor wired; skipping {act}"
+                )
+                continue
+            try:
+                act_ok = bool(await self._action_executor(act, ctx))
+            except Exception as exc:  # a bad action must not crash the run
+                ctx.logger.warning(f"  {label}: action {act} errored: {exc}")
+                act_ok = False
+            if not act_ok:
+                ok = False
+                break
+        if ok:
+            completed.append(label)
+            ctx.notify_task(label, "success")
+            ctx.logger.info(f"  {label}: custom actions done")
+        else:
+            failed.append(label)
+            ctx.notify_task(label, "failed", "action not satisfied")
+            ctx.logger.warning(f"  {label}: custom action failed")
+            if step.on_fail == "abort":
+                return "abort"
         if self._inter_step:
             await self._inter_step(ctx)
         return None

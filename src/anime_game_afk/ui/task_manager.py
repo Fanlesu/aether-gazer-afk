@@ -35,6 +35,7 @@ class TaskState:
     params: dict[str, Any] = field(default_factory=dict)  # L1 plan knobs
     condition: dict | None = None   # L2: when-gate (reddot/ocr/value)
     on_fail: str = "skip"           # L2: "skip" | "abort"
+    actions: list[dict] | None = None  # L3: custom atomic-action sequence
 
 
 @dataclass
@@ -61,6 +62,26 @@ def connect_device() -> DeviceAdapter:
     device = DeviceAdapter(config=AETHER_GAZER_CONFIG.to_device_config())
     device.connect()
     return device
+
+
+def _dump_task(t: TaskState) -> dict[str, Any]:
+    """Serialize a TaskState for persistence.
+
+    Custom steps (``actions`` set) store their full definition (name,
+    description, actions) so they can be reconstructed on load; built-in
+    tasks keep only the user-overridable knobs.
+    """
+    cfg: dict[str, Any] = {
+        "enabled": t.enabled,
+        "params": t.params or {},
+        "condition": t.condition,
+        "on_fail": t.on_fail,
+    }
+    if t.actions is not None:
+        cfg["name"] = t.name
+        cfg["description"] = t.description
+        cfg["actions"] = t.actions
+    return cfg
 
 
 class TaskManager:
@@ -165,15 +186,53 @@ class TaskManager:
             pcfg = pipelines_cfg.get(pipeline.id, {})
             tasks_cfg = pcfg.get("tasks", {})
             order = pcfg.get("order")
-            if order:
-                ordered = [t for tid in order for t in pipeline.tasks
-                           if t.id == tid]
-                rest = [t for t in pipeline.tasks if t.id not in order]
-                pipeline.tasks = ordered + rest
-            for task in pipeline.tasks:
-                if task.id not in tasks_cfg:
+
+            # Rebuild custom steps (L3) from stored config. Built-in tasks
+            # come from task_defs(); only custom steps live here.
+            builtin = {t.id: t for t in pipeline.tasks}
+            custom: dict[str, TaskState] = {}
+            for tid, entry in tasks_cfg.items():
+                if not isinstance(entry, dict) or entry.get("actions") is None:
                     continue
-                entry = tasks_cfg[task.id]
+                custom[tid] = TaskState(
+                    id=tid,
+                    name=entry.get("name", tid),
+                    description=entry.get("description", "自定义步骤"),
+                    safe=False,
+                    enabled=bool(entry.get("enabled", True)),
+                    params=entry.get("params") or {},
+                    condition=entry.get("condition"),
+                    on_fail=entry.get("on_fail", "skip"),
+                    actions=entry.get("actions"),
+                )
+
+            # Compose the ordered task list, interleaving custom steps.
+            composed: list[TaskState] = []
+            seen: set[str] = set()
+            for tid in (order or []):
+                if tid in builtin and tid not in seen:
+                    composed.append(builtin[tid])
+                    seen.add(tid)
+                elif tid in custom and tid not in seen:
+                    composed.append(custom[tid])
+                    seen.add(tid)
+            # Append anything not covered by `order` (defensive).
+            for t in pipeline.tasks:
+                if t.id not in seen:
+                    composed.append(t)
+                    seen.add(t.id)
+            for tid, c in custom.items():
+                if tid not in seen:
+                    composed.append(c)
+                    seen.add(tid)
+            if composed:
+                pipeline.tasks = composed
+
+            # Apply built-in overrides (custom steps were already fully built).
+            for task in pipeline.tasks:
+                entry = tasks_cfg.get(task.id)
+                if not isinstance(entry, dict) or entry.get("actions") is not None:
+                    continue
                 if isinstance(entry, bool):
                     task.enabled = entry
                     task.params = {}
@@ -189,15 +248,7 @@ class TaskManager:
         for pipeline in self._pipelines:
             data["pipelines"][pipeline.id] = {
                 "order": [t.id for t in pipeline.tasks],
-            "tasks": {
-                t.id: {
-                    "enabled": t.enabled,
-                    "params": t.params or {},
-                    "condition": t.condition,
-                    "on_fail": t.on_fail,
-                }
-                for t in pipeline.tasks
-            },
+                "tasks": {t.id: _dump_task(t) for t in pipeline.tasks},
             }
 
         _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +280,7 @@ class TaskManager:
                             "params": t.params,
                             "condition": t.condition,
                             "on_fail": t.on_fail,
+                            "actions": t.actions,
                         }
                         for t in p.tasks
                     ],
@@ -263,14 +315,18 @@ class TaskManager:
         return True
 
     def save_plan(self, pipeline_id: str, tasks: list[dict[str, Any]]) -> bool:
-        """Persist a full user-edited plan (order + enabled + params + L2).
+        """Persist a full user-edited plan (order + enabled + params + L2/L3).
 
         ``tasks`` is the complete, ordered list of task entries as edited
-        in the UI: ``[{"id", "enabled", "params", "condition", "on_fail"},
-        ...]``. Unknown ids are ignored; ``safe`` tasks are forced enabled
-        (mirrors the engine's protection so the persisted config can never
-        disable a task that spends currency/resources). ``condition`` and
-        ``on_fail`` are passed through as-is (the engine validates them).
+        in the UI: ``[{"id", "enabled", "params", "condition", "on_fail",
+        "actions"}, ...]``. ``safe`` tasks are forced enabled (mirrors the
+        engine's protection so the persisted config can never disable a task
+        that spends currency/resources). ``condition``/``on_fail``/``actions``
+        are passed through as-is (the engine validates them).
+
+        Unknown ids are normally ignored (stale config), **except** custom
+        steps (L3): an entry carrying ``actions`` with an unknown id is
+        created as a new custom :class:`TaskState`.
         """
         with self._lock:
             pipeline = self._find_pipeline(pipeline_id)
@@ -280,9 +336,30 @@ class TaskManager:
             new_tasks: list[TaskState] = []
             for entry in tasks:
                 tid = entry.get("id")
-                if tid not in known:
+                if not tid:
                     continue
-                state = known[tid]
+                state = known.get(tid)
+                actions = entry.get("actions")
+                if state is None:
+                    if not actions:
+                        continue  # stale/unknown id without actions -> drop
+                    # L3: new custom step
+                    state = TaskState(
+                        id=tid,
+                        name=entry.get("name", tid),
+                        description=entry.get("description", "自定义步骤"),
+                        safe=False,
+                        actions=actions,
+                    )
+                    known[tid] = state
+                if actions is not None:
+                    # Custom step: adopt the user-defined action sequence and
+                    # metadata. Built-in tasks never carry actions.
+                    state.actions = actions
+                    state.name = entry.get("name", state.name)
+                    state.description = entry.get(
+                        "description", state.description
+                    )
                 state.enabled = bool(entry.get("enabled", True))
                 if state.safe and not state.enabled:
                     state.enabled = True
@@ -549,6 +626,7 @@ class TaskManager:
                 "params": t.params or {},
                 "condition": t.condition,
                 "on_fail": t.on_fail,
+                "actions": t.actions,
             }
             for t in pipeline.tasks
         ]

@@ -313,3 +313,76 @@ def test_run_nested_group_and_abort_propagates():
     result = asyncio.run(engine.run(_ctx(plan=plan)))
     assert result.data["aborted"] is True
     assert mail.execute.call_count == 0
+
+
+# --- L3: custom atomic-action steps ------------------------------------
+
+
+def test_plan_step_from_dict_parses_actions():
+    from anime_game_afk.games.aether_gazer.orchestrator.engine import PlanStep
+    step = PlanStep.from_dict({
+        "id": "custom_1",
+        "actions": [{"type": "click", "x": 0.1, "y": 0.2}],
+    })
+    assert step.actions == [{"type": "click", "x": 0.1, "y": 0.2}]
+    assert step.on_fail == "skip"
+
+
+def test_build_plan_keeps_custom_step():
+    """A custom step (actions set, unknown id) is kept, not dropped."""
+    reg = _registry()
+    engine = TaskEngine(reg)
+    plan = engine.build_plan({"plan": [
+        {"id": "custom_ghost", "actions": [{"type": "wait"}]},
+        {"id": "mail"},
+    ]})
+    assert plan[0].task_id == "custom_ghost"
+    assert plan[0].actions == [{"type": "wait"}]
+    assert plan[1].task_id == "mail"
+
+
+def test_run_custom_actions_runs_executor():
+    reg = _registry()
+    executor = AsyncMock(return_value=True)
+    engine = TaskEngine(reg, action_executor=executor)
+    plan = [{
+        "id": "custom_1", "enabled": True,
+        "actions": [{"type": "click", "x": 0.5, "y": 0.5},
+                    {"type": "wait", "seconds": 1}],
+    }]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "success"
+    assert executor.call_count == 2
+    assert "custom_1" in result.data["completed"]
+
+
+def test_run_custom_action_failure_abort():
+    reg = _registry()
+    executor = AsyncMock(side_effect=[True, False])  # 2nd action fails
+    engine = TaskEngine(reg, action_executor=executor)
+    plan = [
+        {"id": "custom_1", "enabled": True, "on_fail": "abort",
+         "actions": [{"type": "wait"}, {"type": "wait"}]},
+        {"id": "mail"},
+    ]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.data["aborted"] is True
+    assert executor.call_count == 2  # 1st True, 2nd False broke the loop
+    # mail must NOT run after an abort
+    assert reg["mail"].cls.execute.call_count == 0
+
+
+def test_run_custom_action_failure_skip():
+    reg = _registry()
+    executor = AsyncMock(side_effect=[True, False])
+    engine = TaskEngine(reg, action_executor=executor)
+    plan = [
+        {"id": "custom_1", "enabled": True, "on_fail": "skip",
+         "actions": [{"type": "wait"}, {"type": "wait"}]},
+        {"id": "mail"},
+    ]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "failed"  # custom step failed
+    assert executor.call_count == 2
+    # mail still ran under the skip policy
+    assert reg["mail"].cls.execute.call_count == 1
