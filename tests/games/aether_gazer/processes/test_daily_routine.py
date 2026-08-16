@@ -164,3 +164,164 @@ def test_daily_routine_skips_if_cannot_run():
     assert result.status == "success"
     assert result.data["completed"] == []
     assert result.data["failed"] == []
+
+
+# --- Plan (L1 orchestration) tests --------------------------------------
+# The plan is supplied via ctx.config["plan"] and must drive ordering,
+# enable/disable, per-task params, and stay backward compatible.
+
+def _completed_ids(result):
+    """Extract task ids from the completed summary list (strips '(n)')."""
+    return [c.split("(")[0] for c in result.data["completed"]]
+
+
+def test_plan_order_is_respected():
+    """An explicit plan runs tasks in plan order, not registry order."""
+    device = MockDevice()
+    plan = [{"id": tid} for tid in reversed([e[0] for e in _DAILY_TASKS])]
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "plan": plan},
+    )
+    patches = _patch_all()
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    assert result.status == "success"
+    assert _completed_ids(result) == [e["id"] for e in plan]
+
+
+def test_plan_disabled_task_skipped():
+    """A (non-safe) task disabled in the plan is skipped, not counted done."""
+    device = MockDevice()
+    disabled_id = "intel_shards"  # non-safe task, so it can be disabled
+    plan = [
+        {"id": tid, "enabled": tid != disabled_id}
+        for tid in (e[0] for e in _DAILY_TASKS)
+    ]
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "plan": plan},
+    )
+    patches = _patch_all()
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    ids_done = _completed_ids(result)
+    assert disabled_id not in ids_done
+    assert len(ids_done) == _TASK_COUNT - 1
+
+
+def test_backward_compat_enabled_tasks_set():
+    """Legacy enabled_tasks set still works (order = registry default)."""
+    device = MockDevice()
+    enabled = {"mail", "tactics"}
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "enabled_tasks": enabled},
+    )
+    patches = _patch_all()
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    assert set(_completed_ids(result)) == enabled
+    assert len(_completed_ids(result)) == 2
+
+
+def test_safe_task_forced_enabled():
+    """A safe task cannot be disabled via plan — it is forced on."""
+    device = MockDevice()
+    plan = [
+        {"id": tid, "enabled": tid != "mail"}
+        for tid in (e[0] for e in _DAILY_TASKS)
+    ]
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "plan": plan},
+    )
+    patches = _patch_all()
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    assert "mail" in _completed_ids(result)  # safe -> forced enabled
+
+
+def test_plan_unknown_task_id_dropped():
+    """Unknown task ids in a plan are dropped, not executed."""
+    device = MockDevice()
+    plan = [{"id": "mail"}, {"id": "not_a_real_task"}, {"id": "tactics"}]
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "plan": plan},
+    )
+    patches = _patch_all()
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    assert result.status == "success"
+    assert _completed_ids(result) == ["mail", "tactics"]
+
+
+def test_plan_retry_makes_task_succeed():
+    """retry: a task failing once then succeeding runs twice and succeeds."""
+    device = MockDevice()
+    plan = [{"id": "mail", "params": {"retry": 1}}]
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "plan": plan},
+    )
+    mail_execute = AsyncMock(
+        side_effect=[
+            TaskResult(status="failed", message="boom"),
+            TaskResult(status="success"),
+        ]
+    )
+    patches = [
+        patch(f"{_MOD}.ReturnToHub.execute", _task_success()),
+        patch(f"{_MOD}.CollectAllMail.execute", mail_execute),
+        patch(f"{_MOD}.CollectAllMail.can_run", AsyncMock(return_value=True)),
+    ]
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    assert result.status == "success"
+    assert mail_execute.call_count == 2
+
+
+def test_plan_timeout_fails_task():
+    """timeout: a task exceeding its timeout is reported failed."""
+    device = MockDevice()
+
+    async def slow_execute(_ctx):
+        await asyncio.sleep(5)
+        return TaskResult(status="success")
+
+    plan = [{"id": "mail", "params": {"timeout": 0.2}}]
+    ctx = ProcessContext(
+        device=device,
+        config={"game_was_launched": True, "plan": plan},
+    )
+    patches = [
+        patch(f"{_MOD}.ReturnToHub.execute", _task_success()),
+        patch(f"{_MOD}.CollectAllMail.execute", slow_execute),
+        patch(f"{_MOD}.CollectAllMail.can_run", AsyncMock(return_value=True)),
+    ]
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+    assert result.status == "failed"
+    assert "mail" in result.data["failed"]

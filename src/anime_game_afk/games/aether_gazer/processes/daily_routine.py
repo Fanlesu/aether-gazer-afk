@@ -19,7 +19,9 @@ Task order:
 """
 from __future__ import annotations
 
+import asyncio
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from anime_game_afk.games.aether_gazer.processes.base import (
@@ -32,6 +34,7 @@ from anime_game_afk.games.aether_gazer.tasks.activity_tasks import (
 from anime_game_afk.games.aether_gazer.tasks.amusement_tasks import (
     AmusementStreetDaily,
 )
+from anime_game_afk.games.aether_gazer.tasks.base import TaskResult
 from anime_game_afk.games.aether_gazer.tasks.guild_tasks import GuildSupplyClaim
 from anime_game_afk.games.aether_gazer.tasks.keyin_tasks import (
     JointSpecialOpsSweep,
@@ -71,6 +74,65 @@ _DAILY_TASKS: list[tuple[str, type, str, bool]] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# User-configurable plan (L1 task orchestration)
+# ---------------------------------------------------------------------------
+# A "plan" is an ordered list of steps. Each step names a registered task,
+# whether it is enabled, and per-task tuning knobs (params). The plan is
+# supplied via ``ctx.config["plan"]`` (preferred) or derived from the legacy
+# ``ctx.config["enabled_tasks"]`` set; if neither is present, every
+# registered task runs in its default order (backward compatible).
+#
+# This deliberately mirrors the MaaFramework / MAG ``interface.json``
+# convention: a declarative task registry plus an ordered step list, kept
+# separate from the task implementations themselves (data-driven, open/closed
+# — adding a task never touches the orchestration logic).
+@dataclass
+class TaskParams:
+    """Per-task tuning knobs exposed to the user (L1 orchestration)."""
+
+    timeout: float | None = None      # max seconds for a single execute()
+    retry: int = 0                    # extra execute() attempts on failure
+    wait_before: float = 0.0          # seconds to sleep before can_run/execute
+    wait_after: float = 0.0           # seconds to sleep after execute
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> TaskParams:
+        data = data or {}
+        timeout = data.get("timeout")
+        return cls(
+            timeout=float(timeout) if timeout is not None else None,
+            retry=int(data.get("retry", 0) or 0),
+            wait_before=float(data.get("wait_before", 0) or 0),
+            wait_after=float(data.get("wait_after", 0) or 0),
+        )
+
+
+@dataclass
+class PlanStep:
+    """One step in a user plan."""
+
+    task_id: str
+    enabled: bool = True
+    params: TaskParams = field(default_factory=TaskParams)
+
+    @classmethod
+    def from_dict(cls, data) -> PlanStep:
+        if isinstance(data, str):
+            return cls(task_id=data, enabled=True)
+        return cls(
+            task_id=data["id"],
+            enabled=bool(data.get("enabled", True)),
+            params=TaskParams.from_dict(data.get("params")),
+        )
+
+
+# Fast lookup: task_id -> (class, display_name, safe)
+_TASK_LOOKUP: dict[str, tuple[type, str, bool]] = {
+    tid: (cls, name, safe) for (tid, cls, name, safe) in _DAILY_TASKS
+}
+
+
 class DailyRoutine:
     """Complete all daily tasks and claim rewards.
 
@@ -101,37 +163,26 @@ class DailyRoutine:
         hub = ReturnToHub()
         completed: list[str] = []
         failed: list[str] = []
-
-        enabled_tasks: set[str] | None = None
-        raw = ctx.config.get("enabled_tasks")
-        if raw is not None:
-            enabled_tasks = set(raw)
-
         game_was_launched = ctx.config.get("game_was_launched", False)
 
         ctx.logger.info("=== DailyRoutine: starting ===")
 
-        # Log full task list: enabled vs disabled
-        for task_id, _cls, display, _safe in _DAILY_TASKS:
-            if enabled_tasks is not None and task_id not in enabled_tasks:
-                ctx.logger.info(f"  task plan: {task_id} ({display}) — DISABLED")
-            else:
-                ctx.logger.info(f"  task plan: {task_id} ({display}) — enabled")
+        plan = self.build_plan(ctx)
+        # Log the resolved plan
+        for step in plan:
+            state = "enabled" if step.enabled else "DISABLED"
+            extra = f" (params={step.params})" if step.enabled else ""
+            ctx.logger.info(f"  plan: {step.task_id} — {state}{extra}")
 
         routine_t0 = time.monotonic()
-        total = len(_DAILY_TASKS)
-        for i, (task_id, task_cls, _display, _safe) in enumerate(_DAILY_TASKS):
-            # Skip tasks not in the enabled set
-            if enabled_tasks is not None and task_id not in enabled_tasks:
-                ctx.notify_task(task_id, "skipped", "disabled by user")
-                continue
+        total = len(plan)
+        for i, step in enumerate(plan):
+            task_id = step.task_id
+            cls, _display, _safe = _TASK_LOOKUP[task_id]
 
-            # Startup task only runs when game was freshly launched
-            if task_id == "startup" and not game_was_launched:
-                ctx.notify_task(task_id, "skipped", "game already running")
-                ctx.logger.info(f"  {task_id}: skipped (game already running)")
-                # Go to hub via normal ReturnToHub instead
-                await hub.execute(ctx)
+            if not step.enabled:
+                ctx.notify_task(task_id, "skipped", "disabled by user")
+                ctx.logger.info(f"  {task_id}: skipped (disabled)")
                 continue
 
             ctx.logger.info(
@@ -141,9 +192,22 @@ class DailyRoutine:
 
             task_t0 = time.monotonic()
             try:
-                task = task_cls()
+                if step.params.wait_before:
+                    await asyncio.sleep(step.params.wait_before)
+
+                # Startup task only runs when game was freshly launched
+                if task_id == "startup" and not game_was_launched:
+                    ctx.notify_task(task_id, "skipped", "game already running")
+                    ctx.logger.info(
+                        f"  {task_id}: skipped (game already running)"
+                    )
+                    # Go to hub via normal ReturnToHub instead
+                    await hub.execute(ctx)
+                    continue
+
+                task = cls()
                 if await task.can_run(ctx):
-                    result = await task.execute(ctx)
+                    result = await self._run_task(task, ctx, step.params)
                     elapsed = time.monotonic() - task_t0
                     if result.status == "success":
                         summary = task_id
@@ -175,7 +239,8 @@ class DailyRoutine:
                     elapsed = time.monotonic() - task_t0
                     ctx.notify_task(task_id, "skipped", "can_run=False")
                     ctx.logger.info(
-                        f"  {task_id}: can_run=False, skipping ({elapsed:.1f}s)"
+                        f"  {task_id}: can_run=False, skipping "
+                        f"({elapsed:.1f}s)"
                     )
             except Exception as exc:
                 elapsed = time.monotonic() - task_t0
@@ -184,6 +249,9 @@ class DailyRoutine:
                 ctx.logger.error(
                     f"  {task_id}: crashed — {exc} ({elapsed:.1f}s)"
                 )
+
+            if step.params.wait_after:
+                await asyncio.sleep(step.params.wait_after)
 
             # Return to hub between tasks
             await hub.execute(ctx)
@@ -208,4 +276,79 @@ class DailyRoutine:
                 else f"{len(completed)} tasks completed"
             ),
             data={"completed": completed, "failed": failed},
+        )
+
+    # ------------------------------------------------------------------
+    # Plan resolution & execution helpers
+    # ------------------------------------------------------------------
+
+    def build_plan(self, ctx: ProcessContext) -> list[PlanStep]:
+        """Resolve the ordered, enabled plan for this run.
+
+        Priority: explicit ``ctx.config["plan"]`` (ordered step list) >
+        legacy ``ctx.config["enabled_tasks"]`` set (default order) >
+        all registered tasks enabled (default order).
+
+        Unknown task ids are always dropped. On the explicit-plan path,
+        ``safe`` tasks are forced enabled so a user/bug can never silently
+        disable a task that spends in-game currency or resources. The
+        legacy ``enabled_tasks`` whitelist path is left strict (no forcing)
+        to preserve its exact backward-compatible meaning.
+        """
+        raw = ctx.config.get("plan")
+        if raw:
+            steps = [PlanStep.from_dict(e) for e in raw]
+            # safe tasks may not be disabled via an explicit user plan
+            for step in steps:
+                meta = _TASK_LOOKUP.get(step.task_id)
+                if meta is not None and meta[2] and not step.enabled:
+                    ctx.logger.info(
+                        f"  plan: safe task '{step.task_id}' forced enabled"
+                    )
+                    step.enabled = True
+        elif "enabled_tasks" in ctx.config:
+            enabled = set(ctx.config["enabled_tasks"])
+            steps = [
+                PlanStep(tid, enabled=(tid in enabled))
+                for tid in (e[0] for e in _DAILY_TASKS)
+            ]
+        else:
+            steps = [PlanStep(tid) for tid in (e[0] for e in _DAILY_TASKS)]
+
+        # Drop unknown task ids (defensive — a stale config should not crash)
+        return [s for s in steps if s.task_id in _TASK_LOOKUP]
+
+    async def _run_task(
+        self, task, ctx: ProcessContext, params: TaskParams
+    ) -> TaskResult:
+        """Execute one task, applying the retry/timeout knobs from params.
+
+        ``retry`` re-runs execute() on a non-success result; ``timeout``
+        bounds a single execute() with asyncio.wait_for. These are pure
+        orchestration concerns and never touch the task implementation.
+        """
+        attempts = 1 + max(0, params.retry)
+        last: TaskResult | None = None
+        for attempt in range(attempts):
+            coro = task.execute(ctx)
+            if params.timeout:
+                coro = asyncio.wait_for(coro, params.timeout)
+            try:
+                result = await coro
+            except TimeoutError:
+                result = TaskResult(
+                    status="failed",
+                    message=f"任务超时 ({params.timeout}s)",
+                )
+            if result.status == "success":
+                return result
+            last = result
+            if attempt < attempts - 1:
+                ctx.logger.warning(
+                    f"  {task.name}: attempt {attempt+1} failed "
+                    f"({result.status}), retrying..."
+                )
+                await asyncio.sleep(1.0)
+        return last if last is not None else TaskResult(
+            status="failed", message="no attempts executed"
         )
