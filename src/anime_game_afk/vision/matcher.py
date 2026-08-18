@@ -29,6 +29,14 @@ def _no_match() -> MatchResult:
     return MatchResult(score=0.0, x=0, y=0, w=0, h=0, matched=False)
 
 
+# Multi-scale search factors for match_template. 1.0 is always included so
+# exact-size templates behave exactly as before; the surrounding factors
+# absorb DPI / minor UI scaling (and the residual from viewport auto-crop)
+# that would otherwise break single-scale matching. The range (~0.85-1.18)
+# covers typical Windows display-scaling (125%/150%) and small UI drifts.
+MATCH_SCALES: tuple[float, ...] = (1.0, 0.9, 1.1, 0.85, 1.18)
+
+
 def _best_from_result(
     result: np.ndarray,
     method: int,
@@ -65,6 +73,7 @@ def match_template(
     method: int = cv2.TM_CCOEFF_NORMED,
     threshold: float = 0.7,
     mask: np.ndarray | None = None,
+    scales: tuple[float, ...] = MATCH_SCALES,
 ) -> MatchResult:
     """Match a single template against an image.
 
@@ -77,8 +86,14 @@ def match_template(
     because OpenCV only supports masks with ``TM_SQDIFF`` and
     ``TM_CCORR_NORMED``.
 
+    *scales* controls multi-scale search: the template is tried at each scale
+    factor and the highest-scoring hit is returned.  This makes matching
+    tolerant to DPI / minor UI scaling (and the residual from viewport
+    auto-crop).  Pass ``scales=(1.0,)`` to restore strict single-scale behaviour.
+
     Returns a :class:`MatchResult` with ``matched=False`` when the template
-    is larger than the search area or when the best score is below *threshold*.
+    is larger than the search area at every scale or when the best score is
+    below *threshold*.
     """
     if region is not None:
         search = image[region.y : region.y2, region.x : region.x2]
@@ -90,31 +105,54 @@ def match_template(
     th, tw = template.shape[:2]
     sh, sw = search.shape[:2]
 
-    # Template must fit inside the search area.
+    # Template larger than the search area at every scale -> no match.
     if th > sh or tw > sw:
         return MatchResult(score=0.0, x=offset_x, y=offset_y, w=tw, h=th, matched=False)
 
     _start = time.perf_counter()
-    if mask is not None:
-        # Masked matching only works with TM_CCORR_NORMED (and TM_SQDIFF)
-        method = cv2.TM_CCORR_NORMED
-        result_map = cv2.matchTemplate(search, template, method, mask=mask)
-    else:
-        result_map = cv2.matchTemplate(search, template, method)
+    best = MatchResult(score=0.0, x=offset_x, y=offset_y, w=tw, h=th, matched=False)
+    for sc in scales:
+        if sc == 1.0:
+            t = template
+            ttw, tth = tw, th
+            msk = mask
+        else:
+            ttw = max(1, int(round(tw * sc)))
+            tth = max(1, int(round(th * sc)))
+            if ttw > sw or tth > sh:
+                continue
+            t = cv2.resize(template, (ttw, tth), interpolation=cv2.INTER_AREA)
+            # Mask must match the (scaled) template size.
+            msk = (
+                cv2.resize(mask, (ttw, tth), interpolation=cv2.INTER_NEAREST)
+                if mask is not None
+                else None
+            )
 
-    mr = _best_from_result(result_map, method, tw, th, offset_x, offset_y, threshold)
+        if msk is not None:
+            # Masked matching only works with TM_CCORR_NORMED (and TM_SQDIFF)
+            eff_method = cv2.TM_CCORR_NORMED
+            result_map = cv2.matchTemplate(search, t, eff_method, mask=msk)
+        else:
+            eff_method = method
+            result_map = cv2.matchTemplate(search, t, method)
+
+        mr = _best_from_result(result_map, eff_method, ttw, tth, offset_x, offset_y, threshold)
+        if mr.score > best.score:
+            best = mr
+
     _elapsed_ms = (time.perf_counter() - _start) * 1000
-    if mr.matched:
+    if best.matched:
         logger.debug(
             "match_template: {:.0f}ms, score={:.3f} at ({},{}) {}x{} (threshold={})",
-            _elapsed_ms, mr.score, mr.x, mr.y, mr.w, mr.h, threshold,
+            _elapsed_ms, best.score, best.x, best.y, best.w, best.h, threshold,
         )
     else:
         logger.debug(
             "match_template: {:.0f}ms, no match (best={:.3f}, threshold={})",
-            _elapsed_ms, mr.score, threshold,
+            _elapsed_ms, best.score, threshold,
         )
-    return mr
+    return best
 
 
 def match_best(

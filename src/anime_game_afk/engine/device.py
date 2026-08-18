@@ -11,8 +11,11 @@ Coordinate convention:
     Internally converted to actual window pixels for input delivery.
 
 Screenshot scaling:
-    Captures are scaled down proportionally so that height ≤ MAX_HEIGHT (720).
-    Aspect ratio is always preserved — no stretching.  Never upscales.
+    Captures are normalized to the content pack's ``design_resolution``
+    (default 1280x720) via viewport crop + FIT resize.  This makes recognition
+    resolution- and aspect-ratio-independent: non-16:9 windows (e.g. a 16:10
+    laptop running a 16:9 game) are auto-cropped to the game viewport and
+    normalized to the same canvas, so templates / OCR / red-dot anchors stay valid.
 
 Explicitly out of scope:
 - Resource loading (no ``maa.resource.Resource``)
@@ -53,7 +56,8 @@ class DeviceAdapter:
     """Low-level device I/O adapter wrapping MaaFramework's Win32 controller.
 
     All click/swipe coordinates are **fractional** ``(fx, fy)`` in [0.0, 1.0].
-    Screenshots are proportionally scaled so height ≤ ``MAX_HEIGHT``.
+    Screenshots are normalized to the content pack's ``design_resolution``
+    (default 1280x720) via viewport crop + FIT resize.
 
     Example::
 
@@ -259,15 +263,22 @@ class DeviceAdapter:
         if actual_w > 0 and actual_h > 0:
             ratio = actual_w / actual_h
             if abs(ratio - 16 / 9) > 0.02:
-                self._controller = None
-                # NOTE: do NOT reset self._hwnd here — the fallback loop
-                # in _connect_foreground still needs it for the next method.
-                self._actual = None
-                raise DeviceConnectionError(
-                    f"Unsupported aspect ratio: {actual_w}x{actual_h} "
-                    f"({ratio:.3f}). Only 16:9 is supported. "
-                    f"Please resize the game window to a 16:9 resolution "
-                    f"(e.g. 1600x900, 1280x720, 1920x1080)."
+                # Resolution-agnostic since v0.5.x: the screenshot pipeline
+                # auto-crops letterbox bars and normalizes to the content
+                # pack's design_resolution, so non-16:9 windows (e.g. a 16:10
+                # laptop running a 16:9 game) work. Only warn — do NOT reject,
+                # because template matching is scale/aspect tolerant via the
+                # design-canvas normalization + multi-scale matching.
+                logger.warning(
+                    "Window aspect ratio {:.3f} ({}x{}) is not 16:9. "
+                    "Screenshot will auto-crop letterbox bars and normalize to the "
+                    "design canvas ({}x{}). If the game itself is not rendered at the "
+                    "design aspect ratio, template matching may be less reliable.",
+                    ratio,
+                    actual_w,
+                    actual_h,
+                    self._config.design_resolution[0],
+                    self._config.design_resolution[1],
                 )
 
         logger.info(
@@ -321,13 +332,24 @@ class DeviceAdapter:
     # ------------------------------------------------------------------
 
     def screenshot(self) -> np.ndarray:
-        """Capture a screenshot, proportionally scaled so height ≤ MAX_HEIGHT.
+        """Capture a screenshot, normalized to the content pack's design canvas.
 
-        Aspect ratio is always preserved.  Images shorter than MAX_HEIGHT
-        are returned as-is (never upscaled).
+        Pipeline (resolution / aspect-ratio independent):
+            1. Resolve the game viewport in raw pixel space — explicit
+               ``viewport`` config, or auto-detected letterbox bars when the
+               window aspect ratio differs from ``design_resolution``.
+            2. Crop to that viewport.
+            3. FIT-resize into ``design_resolution`` (1280x720 default),
+               letterbox-padding any residual aspect difference.
+
+        For a 16:9 window this is bit-for-bit the previous behaviour
+        (exact resize to 1280x720).  For a non-16:9 window (e.g. a 16:10
+        laptop running a 16:9 game) the letterbox bars are cropped away and
+        the game content is normalized to the same 1280x720 canvas, so
+        templates / OCR / red-dot anchors stay valid.
 
         Returns:
-            BGR ``numpy`` array at proportionally-scaled resolution.
+            BGR ``numpy`` array at ``design_resolution``.
 
         Raises:
             ScreenshotError: Controller returned ``None`` for the image.
@@ -344,21 +366,27 @@ class DeviceAdapter:
             raise ScreenshotError("post_screencap returned None")
 
         raw_h, raw_w = img.shape[:2]
-        if raw_h > MAX_HEIGHT:
-            scale = MAX_HEIGHT / raw_h
-            new_w = int(raw_w * scale)
-            img = cv2.resize(img, (new_w, MAX_HEIGHT), interpolation=cv2.INTER_AREA)
-            h, w = MAX_HEIGHT, new_w
-        else:
-            h, w = raw_h, raw_w
+        dw, dh = self._config.design_resolution
+        design_ar = dw / dh
+
+        # 1. Resolve the source region (game viewport) in raw pixel space.
+        crop = self._resolve_viewport(raw_w, raw_h, design_ar)
+        if crop is not None:
+            x, y, cw, ch = crop
+            img = img[y : y + ch, x : x + cw]
+
+        # 2. Normalize to the design canvas: proportional FIT + letterbox pad.
+        #    For a 16:9 source this is an exact resize to (dw, dh); for other
+        #    aspect ratios the residual is absorbed by neutral padding.
+        img = self._fit_to_canvas(img, dw, dh)
 
         _elapsed_ms = (time.perf_counter() - _start) * 1000
         logger.debug(
-            "Screenshot: {:.0f}ms, raw={}x{}, scaled={}x{}",
-            _elapsed_ms, raw_w, raw_h, w, h,
+            "Screenshot: {:.0f}ms, raw={}x{}, canvas={}x{}",
+            _elapsed_ms, raw_w, raw_h, dw, dh,
         )
 
-        self._screenshot_res = Resolution(width=w, height=h)
+        self._screenshot_res = Resolution(width=dw, height=dh)
         return img
 
     def screenshot_raw(self) -> np.ndarray:
@@ -382,6 +410,87 @@ class DeviceAdapter:
         if img is None:
             raise ScreenshotError("post_screencap returned None")
         return img
+
+    # ------------------------------------------------------------------
+    # Screenshot normalization helpers (resolution / aspect independence)
+    # ------------------------------------------------------------------
+
+    def _resolve_viewport(
+        self,
+        raw_w: int,
+        raw_h: int,
+        design_ar: float,
+    ) -> tuple[int, int, int, int] | None:
+        """Compute the source crop rectangle (raw pixel space) for the game area.
+
+        Priority:
+        1. Explicit ``viewport`` (fractional rect) from config — used as-is.
+        2. Auto-detect letterbox bars when the window aspect ratio differs
+           from the design aspect ratio (covers e.g. a 16:10 window running
+           a 16:9 game with top/bottom bars).
+        3. None — use the whole window (16:9 windows land here).
+        """
+        cfg = self._config
+        if cfg.viewport is not None:
+            fx, fy, fw, fh = cfg.viewport
+            x = int(fx * raw_w)
+            y = int(fy * raw_h)
+            cw = max(1, int(fw * raw_w))
+            ch = max(1, int(fh * raw_h))
+            return (x, y, cw, ch)
+
+        raw_ar = raw_w / raw_h
+        if cfg.auto_viewport and abs(raw_ar - design_ar) > 0.03:
+            detected = self._detect_letterbox_viewport(raw_w, raw_h, design_ar)
+            if detected is not None:
+                return detected
+        return None
+
+    @staticmethod
+    def _detect_letterbox_viewport(
+        raw_w: int,
+        raw_h: int,
+        design_ar: float,
+    ) -> tuple[int, int, int, int] | None:
+        """Estimate the game viewport assuming it is ``design_ar`` letterboxed.
+
+        Primary strategy: the game is full-width and vertically centered, so
+        the game height is ``raw_w / design_ar`` and it is centered vertically.
+        This exactly covers the common case of a 16:9 game on a 16:10 window
+        (top/bottom letterbox bars). Returns None if the estimate is invalid.
+        """
+        game_h = int(raw_w / design_ar)
+        if game_h <= 0 or game_h > raw_h:
+            return None
+        y0 = (raw_h - game_h) // 2
+        return (0, y0, raw_w, game_h)
+
+    @staticmethod
+    def _fit_to_canvas(img: np.ndarray, dw: int, dh: int) -> np.ndarray:
+        """Resize ``img`` into a ``dw x dh`` canvas, preserving aspect ratio.
+
+        The image is scaled with a FIT strategy (largest that fits) and the
+        remaining space is padded with neutral black. For a source whose
+        aspect ratio already equals ``dw/dh`` this is an exact resize with no
+        padding. Always returns an array of shape ``(dh, dw, 3)``.
+        """
+        h, w = img.shape[:2]
+        if h == dh and w == dw:
+            return img
+        src_ar = w / h
+        dst_ar = dw / dh
+        if src_ar > dst_ar:
+            new_w = dw
+            new_h = max(1, int(round(dw / src_ar)))
+        else:
+            new_h = dh
+            new_w = max(1, int(round(dh * src_ar)))
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        canvas = np.zeros((dh, dw, 3), dtype=img.dtype)
+        y0 = (dh - new_h) // 2
+        x0 = (dw - new_w) // 2
+        canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+        return canvas
 
     def click(self, fx: float, fy: float) -> None:
         """Send a mouse click at fractional coordinates.

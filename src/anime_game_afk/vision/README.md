@@ -58,3 +58,23 @@ All functions use **higher = better** scoring regardless of the underlying
 - `TM_SQDIFF`, `TM_SQDIFF_NORMED` — score inverted to `1 - raw_value`
 
 `MatchResult.matched` is `True` when `score >= threshold`.
+
+## Recognition strategy (resolution / aspect independent)
+
+All screenshots are normalized by `engine/device.DeviceAdapter.screenshot()`
+to the content pack's `design_resolution` (default 1280x720) via viewport crop
++ FIT resize. On top of that, the matching layer is tolerant by design:
+
+1. **OCR + red-dot first (primary state detection).** `ocr.py` crops to a
+   region, downscales, recognizes, then maps coordinates back to the original
+   image space — so it is scale-robust. Red-dot detection is blob-based and
+   aspect-agnostic. Prefer these for state/UI gating.
+2. **Template matching as fallback** (`matcher.py`) for icon-only targets
+   with no text. `match_template` now searches multiple scales (see
+   `MATCH_SCALES`) so it absorbs DPI / minor UI scaling that single-scale
+   matching would miss.
+3. **Explicit `viewport`** on `DeviceConfig` (fractional rect) overrides
+   auto letterbox detection when the game area is not the full window.
+
+Rule of thumb: if a state can be told from text or a red dot, do NOT use a
+template — it is the most brittle to layout/scaling changes.

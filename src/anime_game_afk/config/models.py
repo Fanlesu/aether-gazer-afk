@@ -20,6 +20,12 @@ class GameConfig:
     screencap_method: int = MaaWin32ScreencapMethodEnum.Background
     mouse_method: int = MaaWin32InputMethodEnum.SendMessage
     keyboard_method: int = MaaWin32InputMethodEnum.SendMessage
+    # Resolution the screenshot is normalized to (coordinate reference frame
+    # for vision). Defaults to 1280x720 (16:9); content packs may override.
+    design_resolution: tuple[int, int] = (1280, 720)
+    # Optional fractional viewport (fx, fy, fw, fh) of the game area within
+    # the window. None = whole window (or auto letterbox detection).
+    viewport: tuple[float, float, float, float] | None = None
 
     def to_device_config(
         self,
@@ -36,4 +42,6 @@ class GameConfig:
             mouse_method=self.mouse_method,
             keyboard_method=self.keyboard_method,
             game_exe_path=game_exe_path,
+            design_resolution=self.design_resolution,
+            viewport=self.viewport,
         )

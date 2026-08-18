@@ -58,3 +58,15 @@ class DeviceConfig:
     mouse_method: int
     keyboard_method: int
     game_exe_path: str = ""
+    # Resolution the screenshot is normalized to — the coordinate reference
+    # frame for all downstream vision (matcher / OCR / red-dot). Game-specific;
+    # supplied by the content pack. Templates are authored against this canvas.
+    design_resolution: tuple[int, int] = (1280, 720)
+    # Optional fractional viewport (fx, fy, fw, fh) within the window that
+    # contains the actual game area. When None, the whole window is used
+    # (or letterbox bars are auto-detected when the window aspect ratio
+    # differs from design_resolution).
+    viewport: tuple[float, float, float, float] | None = None
+    # Auto-detect letterbox bars to derive the game viewport when the window
+    # aspect ratio differs from design_resolution and no explicit viewport set.
+    auto_viewport: bool = True

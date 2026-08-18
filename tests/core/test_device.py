@@ -232,8 +232,13 @@ def test_connect_raises_connection_error_on_controller_failure() -> None:
             adapter.connect()
 
 
-def test_connect_rejects_non_16_9_aspect_ratio() -> None:
-    """connect() must reject windows that aren't 16:9."""
+def test_connect_allows_non_16_9_aspect_ratio() -> None:
+    """connect() must no longer reject windows that aren't 16:9.
+
+    Since the screenshot pipeline auto-crops letterbox bars and normalizes
+    to the design canvas, a non-16:9 window (e.g. 4:3) now connects and its
+    screenshot is normalized to design_resolution (1280x720).
+    """
     cfg = _make_config()
     adapter = DeviceAdapter(cfg)
     # 4:3 resolution
@@ -249,9 +254,52 @@ def test_connect_rejects_non_16_9_aspect_ratio() -> None:
         mock_toolkit.find_desktop_windows.return_value = [
             _fake_window("TestWindow")
         ]
-        with pytest.raises(DeviceConnectionError, match="16:9"):
-            adapter.connect()
-    assert not adapter.connected
+        adapter.connect()  # must not raise
+    assert adapter.connected
+
+    # The 4:3 window is auto-cropped to a 16:9 viewport and normalized to
+    # the design canvas (1280x720).
+    img = adapter.screenshot()
+    assert img.shape == (720, 1280, 3)
+
+
+def test_screenshot_normalizes_16_10_window_with_letterbox() -> None:
+    """A 2560x1600 (16:10) window running a 16:9 game normalizes to 1280x720.
+
+    The window carries black letterbox bars top/bottom; the game viewport is
+    the centered 16:9 region. After auto-crop + normalize, the output must be
+    the design canvas and the game content must survive at the expected place.
+    """
+    raw_w, raw_h = 2560, 1600
+    img = np.zeros((raw_h, raw_w, 3), dtype=np.uint8)
+    game_h = int(raw_w / (1280 / 720))  # 1440
+    y0 = (raw_h - game_h) // 2            # 80
+    img[y0 : y0 + game_h, :, :] = 128     # grey game region
+    mx, my = raw_w // 2, y0 + game_h // 2  # (1280, 800) — game center
+    img[my - 30 : my + 30, mx - 30 : mx + 30, :] = 255  # white marker
+
+    cfg = _make_config()
+    adapter = DeviceAdapter(cfg)
+    ctrl_mock = _make_controller_mock(
+        resolution=(raw_w, raw_h), screencap_img=img
+    )
+    with (
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
+        patch(
+            "anime_game_afk.engine.device.Win32Controller",
+            return_value=ctrl_mock,
+        ),
+    ):
+        mock_toolkit.find_desktop_windows.return_value = [
+            _fake_window("TestWindow")
+        ]
+        adapter.connect()
+        out = adapter.screenshot()
+
+    assert out.shape == (720, 1280, 3)
+    # White marker must land near the centre of the normalized canvas.
+    marker_patch = out[350:370, 630:650]
+    assert marker_patch.mean() > 200
 
 
 # ---------------------------------------------------------------------------

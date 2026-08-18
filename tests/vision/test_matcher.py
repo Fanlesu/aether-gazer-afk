@@ -6,6 +6,7 @@ uniform-grey background; cv2.TM_CCOEFF_NORMED reliably finds it.
 """
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -140,6 +141,33 @@ def test_match_template_score_is_high_for_perfect_match() -> None:
     result = match_template(img, tmpl)
 
     assert result.score > 0.99
+
+
+def test_match_template_multiscale_finds_scaled_target() -> None:
+    """Multi-scale search must find a template scaled relative to the image.
+
+    The template is embedded at 0.85x into the image. Strict single-scale
+    (``scales=(1.0,)``) should miss it (the size mismatch drops the score
+    below 0.9), while the default multi-scale search (which includes 0.85)
+    must find it. This is what makes matching tolerant to DPI / minor UI
+    scaling and the residual from viewport auto-crop.
+    """
+    from anime_game_afk.vision.matcher import MATCH_SCALES
+
+    assert 0.85 in MATCH_SCALES  # the scale we rely on below
+
+    tmpl = _make_template()  # 20x20
+    scaled = cv2.resize(tmpl, (17, 17), interpolation=cv2.INTER_AREA)
+    scaled_img = np.full((_IMG_SIZE, _IMG_SIZE), _BG_VALUE, dtype=np.uint8)
+    scaled_img[60 : 60 + 17, 60 : 60 + 17] = scaled
+
+    # Strict single-scale must NOT find the 0.85x target.
+    strict = match_template(scaled_img, tmpl, threshold=0.9, scales=(1.0,))
+    assert strict.matched is False
+
+    # Default multi-scale (includes 0.85) MUST find it.
+    multi = match_template(scaled_img, tmpl, threshold=0.9)
+    assert multi.matched is True
 
 
 # ---------------------------------------------------------------------------

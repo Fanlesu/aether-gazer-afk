@@ -30,4 +30,8 @@ AETHER_GAZER_CONFIG = GameConfig(
     mouse_method=MaaWin32InputMethodEnum.SendMessage,
     # Keyboard stays plain SendMessage (block_input=false, no stuck-key risk).
     keyboard_method=MaaWin32InputMethodEnum.SendMessage,
+    # Screenshot normalization target — the coordinate reference frame for
+    # all templates / OCR / red-dot anchors. The game renders 16:9, so the
+    # design canvas is 1280x720; non-16:9 windows are auto-cropped to this.
+    design_resolution=(1280, 720),
 )
