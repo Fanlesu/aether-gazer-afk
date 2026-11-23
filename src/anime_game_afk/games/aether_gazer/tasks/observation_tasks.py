@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 
 from anime_game_afk.games.aether_gazer.checks.ocr import FindTextCheck
 from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
-from anime_game_afk.games.aether_gazer.knowledge.keys import VK_G, VK_T
+from anime_game_afk.games.aether_gazer.knowledge.keys import (
+    VK_ENTER,
+    VK_ESCAPE,
+    VK_G,
+    VK_T,
+)
 from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import (
     RapidClickAction,
@@ -282,14 +287,16 @@ class DailyWeeklyMissionClaim:
 class TacticsTaskClaim:
     """Claim 对策协议 (Tactics Protocol) task rewards.
 
-    Flow: hub → T(对策协议) → 任务 tab
-          → [今日视图] 一键领取? ×3 → 本周任务 tab → 一键领取? ×3
-          → 挑战任务 tab → 一键领取? ×3 → return to hub
+    Flow: hub → T(对策协议) → [主页合约] 一键领取? ×3
+          → 任务 tab → [今日视图] 一键领取? ×3 → 本周任务 tab → 一键领取? ×3
+          → 挑战任务 tab → 一键领取? ×3 → ESC → [主页合约] 补领 → return to hub
 
-    Note: the 一键领取 button only appears after selecting a sidebar tab
-    (本周任务 / 挑战任务; 2026-11-23 user-confirmed); the landing view has
-    none. Each claim attempt is OCR-verified and skipped silently when
-    absent (all claimed already).
+    Note: the 一键领取 button on the 任务 view only appears after selecting
+    a sidebar tab (本周任务 / 挑战任务; 2026-11-23 user-confirmed); the
+    landing view has none. The main contract page has its own 一键领取
+    (bottom-right, contract level rewards) — claimed on entry and re-claimed
+    after the tabs (task claims can unlock further levels). Each claim
+    attempt is OCR-verified and skipped silently when absent.
 
     Identification methods:
     - Keyboard: T shortcut opens tactics protocol
@@ -403,21 +410,30 @@ class TacticsTaskClaim:
         if run_log:
             run_log.snap(ctx.device, "tactics_page")
 
-        # Step 2: Click 任务 button (left-bottom)
+        # Step 2: Claim the main contract-page rewards (合约等级 一键领取,
+        # bottom-right, 2026-11-23 screenshot: level-40 rewards claimable with
+        # a red dot on the button). T lands here first, so claim before
+        # entering the 任务 view.
+        ctx.logger.info("[Step 2] Check for '一键领取' on main contract page")
+        claimed_main = await self._claim_visible(ctx, "Step 2", enter_dismiss=True)
+        if run_log:
+            run_log.snap(ctx.device, "tactics_main_claimed")
+
+        # Step 3: Click 任务 button (left-bottom)
         ctx.logger.info(
-            f"[Step 2] Click 任务 at ({self._TACTICS_TASK_X},{self._TACTICS_TASK_Y})"
+            f"[Step 3] Click 任务 at ({self._TACTICS_TASK_X},{self._TACTICS_TASK_Y})"
         )
         await ClickOp(x=self._TACTICS_TASK_X, y=self._TACTICS_TASK_Y, wait=1.5).run(ctx)
         if run_log:
             run_log.snap(ctx.device, "tactics_tasks")
 
-        # Step 3: OCR "一键领取" on the landing (今日任务) view → click ×3
-        ctx.logger.info("[Step 3] Check for '一键领取' on 对策协议 page")
-        claimed_landing = await self._claim_visible(ctx, "Step 3")
+        # Step 4: OCR "一键领取" on the landing (今日任务) view → click ×3
+        ctx.logger.info("[Step 4] Check for '一键领取' on 对策协议 page")
+        claimed_landing = await self._claim_visible(ctx, "Step 4")
         if run_log:
             run_log.snap(ctx.device, "tactics_after_claim")
 
-        # Steps 4-5: 本周任务 / 挑战任务 tabs — 一键领取 only appears after
+        # Steps 5-6: 本周任务 / 挑战任务 tabs — 一键领取 only appears after
         # selecting a tab (2026-11-23 run log: landing view had no button,
         # and the old "click 返回 + re-check" step actually exited to the
         # hub). Each tab is OCR-located, clicked, then claimed.
@@ -426,7 +442,7 @@ class TacticsTaskClaim:
                 ("本周任务", self._WEEKLY_TAB_X, self._WEEKLY_TAB_Y),
                 ("挑战任务", self._CHALLENGE_TAB_X, self._CHALLENGE_TAB_Y),
             ),
-            start=4,
+            start=5,
         ):
             claimed = await self._claim_tab(ctx, label, fx, fy, f"Step {step_no}")
             if label == "本周任务":
@@ -436,8 +452,22 @@ class TacticsTaskClaim:
         if run_log:
             run_log.snap(ctx.device, "tactics_after_tab_claims")
 
-        # Step 6: Return to hub
-        ctx.logger.info("[Step 6] Return to hub")
+        # Step 7: Back to the main contract page and claim again — claiming
+        # tasks can grant contract EXP and unlock further level rewards
+        # (2026-11-23 user report: the main-page claim was being missed).
+        # Verified via stable page text; if ESC left us somewhere else the
+        # claim silently skips and smart_return handles recovery.
+        ctx.logger.info("[Step 7] ESC → main contract page → claim again")
+        await PressKeyOp(VK_ESCAPE, wait=1.5).run(ctx)
+        if await self._on_tactics_page(ctx):
+            await self._claim_visible(ctx, "Step 7", enter_dismiss=True)
+        else:
+            ctx.logger.info("  [Step 7] not on contract page after ESC — skip")
+        if run_log:
+            run_log.snap(ctx.device, "tactics_final_claim")
+
+        # Step 8: Return to hub
+        ctx.logger.info("[Step 8] Return to hub")
         await ReturnToHubAction().run(ctx)
         if run_log:
             run_log.snap(ctx.device, "tactics_done")
@@ -447,6 +477,7 @@ class TacticsTaskClaim:
             status="success",
             data={
                 "task": "tactics_claim",
+                "claimed_main": claimed_main,
                 "claimed_landing": claimed_landing,
                 "claimed_weekly": claimed_weekly,
                 "claimed_challenge": claimed_challenge,
@@ -477,8 +508,15 @@ class TacticsTaskClaim:
             await ClickOp(x=fallback_x, y=fallback_y, wait=1.5).run(ctx)
         return await self._claim_visible(ctx, step)
 
-    async def _claim_visible(self, ctx: TaskContext, step: str) -> bool:
-        """OCR '一键领取' → click ×3 if present. Returns whether found."""
+    async def _claim_visible(
+        self, ctx: TaskContext, step: str, *, enter_dismiss: bool = False,
+    ) -> bool:
+        """OCR '一键领取' → click ×3 if present. Returns whether found.
+
+        With ``enter_dismiss`` the reward popup after a successful claim is
+        closed with Enter presses (contract-page claims pop one up; tab
+        claims don't need it).
+        """
         claim = await FindTextCheck(target="一键领取").evaluate(ctx)
         if not claim.passed:
             ctx.logger.info(f"  [{step}] '一键领取' not found — skipped")
@@ -489,4 +527,7 @@ class TacticsTaskClaim:
         ctx.logger.info(f"  [{step}] Found '一键领取' at ({cx},{cy}) — clicking ×3")
         for _ in range(3):
             await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        if enter_dismiss:
+            for _ in range(2):
+                await PressKeyOp(VK_ENTER, wait=0.8).run(ctx)
         return True

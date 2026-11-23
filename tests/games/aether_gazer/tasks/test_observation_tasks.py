@@ -299,7 +299,7 @@ def test_tactics_enters_via_hub_icon_when_shortcut_fails():
     task = TacticsTaskClaim()
     # Page check: False ×2 after T (initial + patient re-check), True after
     # the icon click.
-    on_page = AsyncMock(side_effect=[False, False, True])
+    on_page = AsyncMock(side_effect=[False, False, True, True])
     with (
         patch(_ON_PAGE_PATCH, on_page),
         patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
@@ -318,7 +318,7 @@ def test_tactics_shortcut_ok_on_recheck_skips_icon_click():
     ctx = _ctx(device)
     task = TacticsTaskClaim()
     # Page check: False right after T (still loading), True on the re-check.
-    on_page = AsyncMock(side_effect=[False, True])
+    on_page = AsyncMock(side_effect=[False, True, True])
     with (
         patch(_ON_PAGE_PATCH, on_page),
         patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
@@ -380,7 +380,7 @@ def test_tactics_claims_weekly_tab_button():
         return _eval
 
     with (
-        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True, True])),
         patch(_FIND_TEXT, _find()),
         patch(_RETURN_RUN, AsyncMock()),
     ):
@@ -401,7 +401,7 @@ def test_tactics_weekly_tab_ocr_miss_falls_back_to_fixed_coords():
     ctx = _ctx(device)
     task = TacticsTaskClaim()
     with (
-        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True, True])),
         patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
         patch(_RETURN_RUN, AsyncMock()),
     ):
@@ -445,7 +445,7 @@ def test_tactics_claims_challenge_tab_after_weekly():
         return _eval
 
     with (
-        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True, True])),
         patch(_FIND_TEXT, _find()),
         patch(_RETURN_RUN, AsyncMock()),
     ):
@@ -466,7 +466,7 @@ def test_tactics_challenge_tab_ocr_miss_falls_back_to_fixed_coords():
     ctx = _ctx(device)
     task = TacticsTaskClaim()
     with (
-        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True, True])),
         patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
         patch(_RETURN_RUN, AsyncMock()),
     ):
@@ -475,3 +475,40 @@ def test_tactics_challenge_tab_ocr_miss_falls_back_to_fixed_coords():
     assert result.status == "success"
     assert result.data["claimed_challenge"] is False
     assert (0.111, 0.406) in device.click_log
+
+
+def test_tactics_claims_main_contract_page_before_task_tabs():
+    """2026-11-23 regression: the main contract page has its own 一键领取
+    (bottom-right, contract level rewards) which was being skipped — the
+    flow jumped straight to the 任务 tab. It must be claimed on entry,
+    before any tab click, with Enter dismisses afterwards."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+
+    def _find_claim_button():
+        async def _eval(self, ctx):
+            if self._target == "一键领取":
+                return CheckResult(
+                    passed=True,
+                    data=type("R", (), {"region": type(
+                        "Reg", (), {"x": 1100, "y": 660, "w": 120, "h": 40},
+                    )()})(),
+                )
+            return CheckResult(passed=False)
+        return _eval
+
+    with (
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True, True])),
+        patch(_FIND_TEXT, _find_claim_button()),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert result.data["claimed_main"] is True
+    claim_idx = device.click_log.index((0.725, 0.7555555555555555))
+    tab_idx = device.click_log.index((0.101, 0.932))
+    assert claim_idx < tab_idx
+    # Reward popup dismissed with Enter ×2 after the main-page claim.
+    assert device.key_log.count(13) >= 2
