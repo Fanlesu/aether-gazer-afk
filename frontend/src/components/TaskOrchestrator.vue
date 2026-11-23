@@ -77,6 +77,19 @@
                 v-model.number="task.params.wait_after"
               >
             </label>
+            <!-- Task-specific custom params (params_schema from backend) -->
+            <label
+              v-for="sp in task.params_schema"
+              :key="sp.key"
+              class="orch-field"
+            >
+              <span>{{ sp.label }}</span>
+              <input
+                type="number" :min="sp.min" :max="sp.max" step="10"
+                v-model.number="task.params.extra[sp.key]"
+                :placeholder="String(sp.default)"
+              >
+            </label>
           </div>
 
           <!-- Custom steps (L3): visual atomic-action editor -->
@@ -257,7 +270,11 @@ function cloneTasks() {
       retry: t.params?.retry ?? 0,
       wait_before: t.params?.wait_before ?? 0,
       wait_after: t.params?.wait_after ?? 0,
+      // Custom knobs (schema-driven). Empty unless the user typed a value —
+      // the backend applies each schema default when the key is absent.
+      extra: t.params?.extra ? { ...t.params.extra } : {},
     },
+    params_schema: t.params_schema || [],
   }))
 }
 
@@ -307,6 +324,7 @@ const dirty = computed(() => {
     if ((ap.retry ?? 0) !== (bp.retry ?? 0)) return true
     if ((ap.wait_before ?? 0) !== (bp.wait_before ?? 0)) return true
     if ((ap.wait_after ?? 0) !== (bp.wait_after ?? 0)) return true
+    if (JSON.stringify(ap.extra ?? {}) !== JSON.stringify(bp.extra ?? {})) return true
   }
   return false
 })
@@ -349,7 +367,8 @@ function addCustomStep() {
     on_fail: 'skip',
     condition: '',
     actions: [defaultActionFor('click')],
-    params: { timeout: null, retry: 0, wait_before: 0, wait_after: 0 },
+    params: { timeout: null, retry: 0, wait_before: 0, wait_after: 0, extra: {} },
+    params_schema: [],
   })
 }
 
@@ -402,11 +421,23 @@ function normalizeParams(p) {
   const timeout = (
     rawTimeout === '' || rawTimeout === null || rawTimeout === undefined
   ) ? null : Number(rawTimeout)
+  // Custom knobs: keep only finite numbers; empty/invalid entries are
+  // dropped so the backend applies its schema defaults.
+  const extra = {}
+  if (p.extra && typeof p.extra === 'object') {
+    for (const [k, v] of Object.entries(p.extra)) {
+      const n = Number(v)
+      if (v !== '' && v !== null && v !== undefined && Number.isFinite(n)) {
+        extra[k] = n
+      }
+    }
+  }
   return {
     timeout,
     retry: Math.max(0, Math.floor(Number(p.retry) || 0)),
     wait_before: Math.max(0, Number(p.wait_before) || 0),
     wait_after: Math.max(0, Number(p.wait_after) || 0),
+    extra,
   }
 }
 

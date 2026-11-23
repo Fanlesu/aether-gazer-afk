@@ -780,6 +780,10 @@ class ClaimDailyStaminaPacks:
     - Template match: verify hub page via identify_page
     - OCR: verify hub UI active ("前往作战"), read stamina NNN/NNN,
             find "领取"/"已领取" buttons
+
+    After claiming, optionally tops up stamina with potions on the 冷却剂
+    tab until reaching ``params.extra.target_stamina`` (default 450), a
+    user-editable knob exposed via task_defs params_schema.
     """
 
     name = "claim_daily_stamina_packs"
@@ -791,9 +795,12 @@ class ClaimDailyStaminaPacks:
 
     _TOP_BAR_REGION = Rect(640, 0, 640, 64)  # Top bar where stamina is shown
 
-    # Hub top-bar stamina entry red dot (verified 2026-04-06 @ 1600x900).
-    # Used by the shared RedDotCheck gate in execute Step 0.
-    _STAMINA_RED_DOT = RED_DOTS["stamina_pack"]
+    # Potion values on the 冷却剂 tab, largest first (planning order).
+    _POTION_VALUES = (120, 60, 30)
+    # Hard cap on potions used per run (covers ~3600 stamina).
+    _MAX_POTIONS_PER_RUN = 30
+    # Default target stamina when params.extra has no target_stamina.
+    _DEFAULT_TARGET_STAMINA = 450
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
@@ -802,30 +809,6 @@ class ClaimDailyStaminaPacks:
         run_log: RunLog | None = getattr(ctx, "run_log", None)
 
         ctx.logger.info("=== ClaimDailyStaminaPacks: starting ===")
-
-        # ── Step 0: Red-dot gate on the stamina entry (hub top bar) ──
-        # Uses the shared RedDotCheck (HSV dual-segment + connected-component
-        # blob filter) instead of a hand-rolled color_ratio region, so the
-        # stamina gate benefits from the same noise rejection as the mail /
-        # mission tasks.
-        ctx.logger.info("[Step 0] Check red dot on stamina entry")
-        shot = await ScreenshotOp().run(ctx)
-        dot_check = await RedDotCheck(
-            *self._STAMINA_RED_DOT, label="stamina", image=shot.data,
-        ).evaluate(ctx)
-        has_dot = dot_check.passed
-        ctx.logger.info(
-            f"[Step 0] Red dot on stamina entry: {has_dot} "
-            f"(ratio={dot_check.data:.3f})"
-        )
-        if not has_dot:
-            ctx.logger.info(
-                "=== ClaimDailyStaminaPacks: skipped — no red dot ==="
-            )
-            return TaskResult(
-                status="skipped",
-                message="No red dot on stamina entry",
-            )
 
         # ── Step 1: Return to hub ──
         ctx.logger.info("[Step 1] Return to hub")
@@ -867,6 +850,27 @@ class ClaimDailyStaminaPacks:
         claimed = await self._claim_packs(ctx, run_log)
         ctx.logger.info(f"[Step 5] Attempted {claimed} claims")
 
+        # ── Step 5.5: Use stamina potions to reach the target ──
+        # Optional user knob (params.extra.target_stamina, default 450).
+        potions_used: dict[str, int] = {}
+        target = self._target_stamina()
+        ctx.logger.info(f"[Step 5.5] Target stamina: {target}")
+        current = await self._read_stamina_from_panel(ctx)
+        if current is None:
+            ctx.logger.warning(
+                "[Step 5.5] Cannot read stamina — skipping potion step"
+            )
+        else:
+            deficit = target - current
+            if deficit <= 0:
+                ctx.logger.info(
+                    f"[Step 5.5] Stamina {current} >= target {target} — no potions"
+                )
+            else:
+                potions_used = await self._use_stamina_potions(
+                    ctx, deficit, run_log,
+                )
+
         # ── Step 6: Close panel and return ──
         ctx.logger.info("[Step 6] Close panel and return to hub")
         await PressKeyOp(key=VK_ESCAPE, wait=1.0).run(ctx)
@@ -893,7 +897,8 @@ class ClaimDailyStaminaPacks:
 
         ctx.logger.info(
             f"=== ClaimDailyStaminaPacks: complete "
-            f"(claimed={claimed}, gained={stamina_gained}) ==="
+            f"(claimed={claimed}, gained={stamina_gained}, "
+            f"potions={potions_used or 'none'}) ==="
         )
         return TaskResult(
             status="success",
@@ -903,8 +908,18 @@ class ClaimDailyStaminaPacks:
                 "stamina_gained": stamina_gained,
                 "stamina_before": stamina_before,
                 "stamina_after": stamina_after,
+                "potions_used": potions_used,
+                "target_stamina": target,
             },
         )
+
+    def _target_stamina(self) -> int:
+        """Read target_stamina from engine-attached params.extra (default 450)."""
+        extra = getattr(self, "extra", None) or {}
+        try:
+            return max(0, int(extra.get("target_stamina") or self._DEFAULT_TARGET_STAMINA))
+        except (TypeError, ValueError):
+            return self._DEFAULT_TARGET_STAMINA
 
     # ------------------------------------------------------------------
     # Read stamina from top bar
@@ -1071,6 +1086,147 @@ class ClaimDailyStaminaPacks:
                 run_log.save_image(r.data, f"daily_stamina_after_claim_{i}")
 
         return claimed
+
+    # ------------------------------------------------------------------
+    # Use stamina potions (冷却剂 tab) to reach the target stamina
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _plan_potions(deficit: int) -> list[int]:
+        """Plan which potions to use to cover ``deficit`` (pure function).
+
+        Greedy: each round pick the largest potion that still fits the
+        remaining deficit; when none fits (deficit < 30) use the smallest
+        potion so the final stamina overshoots the target by at most 29
+        (user preference: prefer exceeding the target over falling short).
+        """
+        seq: list[int] = []
+        remaining = deficit
+        while remaining > 0 and len(seq) < ClaimDailyStaminaPacks._MAX_POTIONS_PER_RUN:
+            potion = max(
+                (v for v in ClaimDailyStaminaPacks._POTION_VALUES if v <= remaining),
+                default=ClaimDailyStaminaPacks._POTION_VALUES[-1],
+            )
+            seq.append(potion)
+            remaining -= potion
+        return seq
+
+    async def _read_selection_total(self, ctx: TaskContext) -> int | None:
+        """OCR the big number showing the total value of selected potions."""
+        # Big orange number right of the item grid (verified 2026-11-23).
+        total_region = Rect(800, 270, 200, 130)
+        r = await OcrFullCheck(region=total_region).evaluate(ctx)
+        if not r.passed:
+            return None
+        for item in r.data:
+            clean = item.text.strip().replace(" ", "")
+            if clean.isdigit():
+                return int(clean)
+        return None
+
+    async def _use_stamina_potions(
+        self, ctx: TaskContext, deficit: int, run_log: RunLog | None,
+    ) -> dict[str, int]:
+        """Select and use potions on the 冷却剂 tab to cover ``deficit``.
+
+        Selection model (verified 2026-11-23): each click on a potion slot
+        selects one more of that potion (a minus button appears on the icon
+        once selected); the big number on the right shows the selected
+        total. Selection is committed with the 确定 button.
+
+        Fail-safe: the selection total is OCR-verified before confirming —
+        on any mismatch (or an empty selection) the dialog is cancelled and
+        no potion is consumed.
+        """
+        from anime_game_afk.games.aether_gazer.knowledge.pages import (
+            find_element,
+        )
+
+        plan = self._plan_potions(deficit)
+        expected_total = sum(plan)
+        counts: dict[int, int] = {}
+        for potion in plan:
+            counts[potion] = counts.get(potion, 0) + 1
+        if not plan:
+            return {}
+
+        # Switch to the 冷却剂 tab
+        coolant = find_element("stamina_panel", "Coolant")
+        if coolant is None:
+            ctx.logger.warning("  potions: 'Coolant' element not in knowledge")
+            return {}
+        ctx.logger.info(f"  potions: plan {plan} (total {expected_total})")
+        await ClickOp(x=coolant.coord[0], y=coolant.coord[1], wait=1.0).run(ctx)
+
+        # Select potions: click each slot once per unit wanted
+        slot_names = {30: "Potion 30", 60: "Potion 60", 120: "Potion 120"}
+        for value in (120, 60, 30):
+            n = counts.get(value, 0)
+            if n <= 0:
+                continue
+            elem = find_element("stamina_panel", slot_names[value])
+            if elem is None:
+                ctx.logger.warning(
+                    f"  potions: '{slot_names[value]}' not in knowledge — cancelling"
+                )
+                await self._cancel_selection(ctx)
+                return {}
+            for i in range(n):
+                await ClickOp(x=elem.coord[0], y=elem.coord[1], wait=0.4).run(ctx)
+            ctx.logger.info(f"  potions: selected {n}x +{value}")
+
+        if run_log:
+            shot = await ScreenshotOp().run(ctx)
+            run_log.save_image(shot.data, "stamina_potions_selected")
+
+        # Verify the selected total before committing
+        total = await self._read_selection_total(ctx)
+        if total is not None:
+            if total == 0:
+                ctx.logger.warning(
+                    "  potions: selection total is 0 — cancelling"
+                )
+                await self._cancel_selection(ctx)
+                return {}
+            if total != expected_total:
+                ctx.logger.warning(
+                    f"  potions: total mismatch (OCR={total}, "
+                    f"expected={expected_total}) — cancelling"
+                )
+                await self._cancel_selection(ctx)
+                return {}
+            ctx.logger.info(f"  potions: selection verified ({total})")
+        else:
+            ctx.logger.warning(
+                "  potions: total unreadable via OCR — proceeding anyway"
+            )
+
+        # Commit with 确定, then dismiss any result popup
+        confirm = find_element("stamina_panel", "Confirm Use")
+        if confirm is not None:
+            await ClickOp(x=confirm.coord[0], y=confirm.coord[1], wait=1.5).run(ctx)
+        else:
+            ctx.logger.warning("  potions: confirm element missing — Enter fallback")
+            await PressKeyOp(key=VK_ENTER, wait=1.5).run(ctx)
+        await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
+
+        ctx.logger.info(
+            f"  potions: used {sum(counts.values())} potions "
+            f"({', '.join(f'+{v}x{n}' for v, n in sorted(counts.items()))})"
+        )
+        return {f"{v}": n for v, n in sorted(counts.items())}
+
+    async def _cancel_selection(self, ctx: TaskContext) -> None:
+        """Cancel the potion selection dialog (fixed coord, ESC fallback)."""
+        from anime_game_afk.games.aether_gazer.knowledge.pages import (
+            find_element,
+        )
+
+        cancel = find_element("stamina_panel", "Cancel Use")
+        if cancel is not None:
+            await ClickOp(x=cancel.coord[0], y=cancel.coord[1], wait=1.0).run(ctx)
+        else:
+            await PressKeyOp(key=VK_ESCAPE, wait=1.0).run(ctx)
 
     async def _read_stamina_from_panel(self, ctx: TaskContext) -> int | None:
         """Read stamina NNN/NNN from panel top bar."""

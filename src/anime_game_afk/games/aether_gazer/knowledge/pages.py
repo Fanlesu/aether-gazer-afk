@@ -296,10 +296,19 @@ PLAYER_INFO = PageDef(
 STAMINA_PANEL = PageDef(
     page_id="stamina_panel", name="体力面板", name_en="Stamina Panel",
     # Three tabs with fixed positions (verified 2026-04-05)
+    # Potion slots / confirm / cancel verified 2026-11-23 @ 1920x1079:
+    # top-row items left→right are +30 / +60 / +120; each click selects one
+    # more of that potion (minus button appears once selected); the big
+    # number on the right shows the selected total before 确定.
     elements=(
         E("冷却剂", "Coolant", (0.282, 0.172)),
         E("移转之辉", "Transfer Light", (0.489, 0.17)),
         E("每日补给", "Daily Supply", (0.696, 0.171)),
+        E("补充30", "Potion 30", (0.176, 0.382)),
+        E("补充60", "Potion 60", (0.278, 0.382)),
+        E("补充120", "Potion 120", (0.380, 0.382)),
+        E("确定", "Confirm Use", (0.697, 0.847)),
+        E("取消", "Cancel Use", (0.303, 0.847)),
     ),
     is_overlay=True,
     parent_page="main_hub",

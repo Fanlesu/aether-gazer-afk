@@ -183,3 +183,40 @@ def test_get_pipelines_includes_actions(mgr) -> None:
         {"type": "click", "x": 0.1, "y": 0.2}
     ]
     assert tasks["mail"]["actions"] is None
+
+
+def test_get_pipelines_includes_params_schema(mgr) -> None:
+    """params_schema from task_defs flows through get_pipelines for the UI."""
+    mgr._pipelines[0].tasks.append(TaskState(
+        id="stamina_packs", name="领取体力包", description="", safe=True,
+        params_schema=[{
+            "key": "target_stamina", "label": "目标体力", "type": "number",
+            "default": 450, "min": 240, "max": 2000,
+        }],
+    ))
+    pipelines = mgr.get_pipelines()
+    tasks = {t["id"]: t for p in pipelines for t in p["tasks"]}
+    assert tasks["stamina_packs"]["params_schema"] == [{
+        "key": "target_stamina", "label": "目标体力", "type": "number",
+        "default": 450, "min": 240, "max": 2000,
+    }]
+    # Tasks without a schema expose an empty list (forward compatible)
+    assert tasks["mail"]["params_schema"] == []
+
+
+def test_save_plan_persists_params_extra(mgr, tmp_path: Path) -> None:
+    """Custom params (params.extra) survive save/load roundtrip untouched."""
+    plan = [
+        {"id": "mail", "enabled": True,
+         "params": {"timeout": None, "retry": 0, "wait_before": 0,
+                    "wait_after": 0, "extra": {"target_stamina": 500}}},
+    ]
+    assert mgr.save_plan("daily_routine", plan) is True
+    tasks = {t.id: t for t in mgr._pipelines[0].tasks}
+    assert tasks["mail"].params["extra"] == {"target_stamina": 500}
+    # Reload from disk and verify
+    mgr2 = _make_manager()
+    with patch.object(tm_mod, "_CONFIG_PATH", tmp_path / "ui_state.json"):
+        mgr2._load_config()
+    tasks2 = {t.id: t for t in mgr2._pipelines[0].tasks}
+    assert tasks2["mail"].params["extra"] == {"target_stamina": 500}

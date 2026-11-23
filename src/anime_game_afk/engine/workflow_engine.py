@@ -53,6 +53,10 @@ class TaskParams:
     retry: int = 0                    # extra execute() attempts on failure
     wait_before: float = 0.0          # seconds to sleep before can_run/execute
     wait_after: float = 0.0           # seconds to sleep after execute
+    # Task-specific custom knobs (e.g. stamina_packs.target_stamina). Opaque
+    # to the engine — attached to the task instance before execute(); tasks
+    # read them via ``getattr(self, "extra", {})``.
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict | None) -> TaskParams:
@@ -63,6 +67,7 @@ class TaskParams:
             retry=int(data.get("retry", 0) or 0),
             wait_before=float(data.get("wait_before", 0) or 0),
             wait_after=float(data.get("wait_after", 0) or 0),
+            extra=dict(data.get("extra") or {}),
         )
 
 
@@ -354,6 +359,10 @@ class WorkflowEngine:
                 await asyncio.sleep(step.params.wait_before)
 
             task = cls()
+            # Per-task custom knobs (params.extra) — attached so the task
+            # implementation can read them without a signature change.
+            if step.params.extra:
+                task.extra = dict(step.params.extra)
             if await task.can_run(ctx):
                 result = await self._run_task(task, ctx, step.params)
                 elapsed = time.monotonic() - task_t0

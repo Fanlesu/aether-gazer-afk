@@ -93,6 +93,23 @@ _REGISTRY: dict[str, TaskMeta] = {
 }
 
 
+# Task-specific custom params rendered by the orchestrator UI (L1 extra
+# knobs). Saved into ``params.extra`` and attached to the task instance by
+# the engine. Tasks not listed here have no custom params.
+_TASK_PARAM_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "stamina_packs": [
+        {
+            "key": "target_stamina",
+            "label": "目标体力",
+            "type": "number",
+            "default": 450,
+            "min": 240,
+            "max": 2000,
+        },
+    ],
+}
+
+
 class DailyRoutine:
     """Complete all daily tasks and claim rewards.
 
@@ -126,6 +143,7 @@ class DailyRoutine:
                 ),
                 "safe": safe,
                 "default_enabled": default_enabled,
+                "params_schema": _TASK_PARAM_SCHEMAS.get(task_id, []),
             }
             for task_id, task_cls, display_name, safe, default_enabled in (
                 _DAILY_TASKS

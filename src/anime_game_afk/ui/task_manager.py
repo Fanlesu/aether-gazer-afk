@@ -35,6 +35,12 @@ class TaskState:
     safe: bool = True
     status: str = "pending"  # pending | running | success | failed | skipped
     params: dict[str, Any] = field(default_factory=dict)  # L1 plan knobs
+    params_schema: list[dict[str, Any]] = field(default_factory=list)
+    """UI metadata for task-specific custom params (from task_defs).
+
+    Each entry: ``{key, label, type, default, min, max}``. Rendered by the
+    orchestrator as extra number inputs; saved into ``params.extra``.
+    """
     condition: dict | None = None   # L2: when-gate (reddot/ocr/value)
     on_fail: str = "skip"           # L2: "skip" | "abort"
     actions: list[dict] | None = None  # L3: custom atomic-action sequence
@@ -156,6 +162,7 @@ class TaskManager:
                         description=td.get("description", ""),
                         safe=td.get("safe", True),
                         enabled=td.get("default_enabled", True),
+                        params_schema=td.get("params_schema") or [],
                     ))
 
             self._pipelines.append(PipelineDef(
@@ -281,6 +288,7 @@ class TaskManager:
                             "safe": t.safe,
                             "status": t.status,
                             "params": t.params,
+                            "params_schema": t.params_schema,
                             "condition": t.condition,
                             "on_fail": t.on_fail,
                             "actions": t.actions,

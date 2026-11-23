@@ -406,3 +406,55 @@ def test_run_custom_action_failure_skip():
     assert executor.call_count == 2
     # mail still ran under the skip policy
     assert reg["mail"].cls.execute.call_count == 1
+
+
+# --- params.extra (task-specific custom knobs) --------------------------
+
+
+class _ExtraCaptureTask:
+    """Fake task recording the ``extra`` dict attached by the engine."""
+
+    name = "mail"
+    captured: dict = {}
+    can_run_called = False
+
+    async def can_run(self, ctx) -> bool:
+        _ExtraCaptureTask.can_run_called = True
+        return True
+
+    async def execute(self, ctx) -> TaskResult:
+        _ExtraCaptureTask.captured = dict(getattr(self, "extra", {}) or {})
+        return TaskResult(status="success")
+
+
+def test_plan_step_from_dict_parses_extra_params():
+    from anime_game_afk.engine.workflow_engine import PlanStep
+
+    step = PlanStep.from_dict(
+        {"id": "mail", "params": {"retry": 1, "extra": {"target_stamina": 450}}}
+    )
+    assert step.params.extra == {"target_stamina": 450}
+    assert step.params.retry == 1
+    # Missing extra → empty dict (backward compatible with old plans)
+    assert PlanStep.from_dict({"id": "mail"}).params.extra == {}
+
+
+def test_run_attaches_extra_params_to_task_instance():
+    reg = {"mail": TaskMeta(_ExtraCaptureTask, "邮件", True)}
+    engine = WorkflowEngine(reg)
+    plan = [
+        {"id": "mail", "enabled": True,
+         "params": {"extra": {"target_stamina": 450}}},
+    ]
+    result = asyncio.run(engine.run(_ctx(plan=plan)))
+    assert result.status == "success"
+    assert _ExtraCaptureTask.can_run_called
+    assert _ExtraCaptureTask.captured == {"target_stamina": 450}
+
+
+def test_run_no_extra_params_leaves_task_untouched():
+    reg = {"mail": TaskMeta(_ExtraCaptureTask, "邮件", True)}
+    engine = WorkflowEngine(reg)
+    result = asyncio.run(engine.run(_ctx(plan=[{"id": "mail"}])))
+    assert result.status == "success"
+    assert _ExtraCaptureTask.captured == {}

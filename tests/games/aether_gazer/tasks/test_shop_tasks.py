@@ -320,22 +320,10 @@ def test_daily_stamina_metadata():
 
 
 def test_daily_stamina_can_run_always():
-    """can_run is unconditional (red-dot gate lives inside execute)."""
+    """can_run is unconditional (task always opens the panel and claims)."""
     device = MockDevice()
     ctx = TaskContext(device=device)
     assert _run(ClaimDailyStaminaPacks().can_run(ctx)) is True
-
-
-def test_daily_stamina_skips_without_red_dot():
-    """No red dot on stamina entry → task skips before any navigation."""
-    device = MockDevice()
-    ctx = TaskContext(device=device)
-    # RedDotCheck stubbed to fail → no red dot → skip without touching ops.
-    with _patch_red_dot(False) as mock_rd:
-        result = _run(ClaimDailyStaminaPacks().execute(ctx))
-    mock_rd.assert_called_once()
-    assert result.status == "skipped"
-    assert "red dot" in result.message.lower()
 
 
 def test_daily_stamina_returns_failed_when_cannot_reach_hub():
@@ -343,7 +331,6 @@ def test_daily_stamina_returns_failed_when_cannot_reach_hub():
     device = MockDevice()
     ctx = TaskContext(device=device)
     with (
-        _patch_red_dot(True),  # red dot present
         patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=False))),
         patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
     ):
@@ -356,7 +343,6 @@ def test_daily_stamina_claims_packs_on_success():
     device = MockDevice()
     ctx = TaskContext(device=device)
     with (
-        _patch_red_dot(True),  # red dot present
         patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
         patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
         # Mock the private helpers so no real OCR/panel interaction.
@@ -374,12 +360,187 @@ def test_daily_stamina_claims_packs_on_success():
             ClaimDailyStaminaPacks, "_claim_packs",
             new=AsyncMock(return_value=2),
         ),
+        # Step 5.5 reads the panel stamina (160 < default target 450), but
+        # the potion flow itself is stubbed out here.
         patch.object(
             ClaimDailyStaminaPacks, "_read_stamina_from_panel",
             new=AsyncMock(return_value=160),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_use_stamina_potions",
+            new=AsyncMock(return_value={}),
         ),
     ):
         result = _run(ClaimDailyStaminaPacks().execute(ctx))
     assert result.status == "success"
     assert result.data["claimed"] == 2
     assert result.data["stamina_gained"] == 60
+    assert result.data["potions_used"] == {}
+    assert result.data["target_stamina"] == 450
+
+
+# -- ClaimDailyStaminaPacks: potion top-up (Step 5.5) --
+
+
+def test_plan_potions_greedy_exact_and_overshoot():
+    """Greedy: largest potion that fits; smallest when nothing fits."""
+    plan = ClaimDailyStaminaPacks._plan_potions
+    assert plan(0) == []
+    # deficit exactly coverable → exact fill
+    assert plan(450) == [120, 120, 120, 60, 30]
+    assert plan(90) == [60, 30]
+    # deficit < 30 → smallest potion, overshoot ≤ 29 (prefer exceeding)
+    assert plan(10) == [30]
+    assert plan(29) == [30]
+    # 100 → 60+30+30 (exact 100), never a needless 120
+    assert plan(100) == [60, 30, 30]
+    # mixed deficit
+    assert plan(341) == [120, 120, 60, 30, 30]  # 360 ≥ 341, overshoot 19
+
+
+def test_plan_potions_respects_max_cap():
+    plan = ClaimDailyStaminaPacks._plan_potions
+    huge = plan(999999)
+    assert len(huge) <= ClaimDailyStaminaPacks._MAX_POTIONS_PER_RUN
+
+
+def test_target_stamina_default_and_extra():
+    task = ClaimDailyStaminaPacks()
+    assert task._target_stamina() == 450  # default
+    task.extra = {"target_stamina": 500}
+    assert task._target_stamina() == 500
+    task.extra = {"target_stamina": "not-a-number"}
+    assert task._target_stamina() == 450  # bad value → fallback to default
+
+
+def test_daily_stamina_uses_potions_with_extra_target():
+    """params.extra.target_stamina drives the deficit passed to the potion flow."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    potion_mock = AsyncMock(return_value={"120": 2, "60": 1, "30": 1})
+    with (
+        patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina",
+            new=AsyncMock(side_effect=[160, 490]),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_open_stamina_panel",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_claim_packs",
+            new=AsyncMock(return_value=2),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina_from_panel",
+            new=AsyncMock(return_value=160),
+        ),
+        patch.object(ClaimDailyStaminaPacks, "_use_stamina_potions", new=potion_mock),
+    ):
+        task = ClaimDailyStaminaPacks()
+        task.extra = {"target_stamina": 500}
+        result = _run(task.execute(ctx))
+    assert result.status == "success"
+    # deficit = 500 - 160 = 340
+    assert potion_mock.call_args.args[1] == 340
+    assert result.data["potions_used"] == {"120": 2, "60": 1, "30": 1}
+    assert result.data["target_stamina"] == 500
+
+
+def test_daily_stamina_skips_potions_at_target():
+    """Stamina already >= target → potion flow never invoked."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    potion_mock = AsyncMock(return_value={})
+    with (
+        patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina",
+            new=AsyncMock(side_effect=[500, 500]),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_open_stamina_panel",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_claim_packs",
+            new=AsyncMock(return_value=2),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina_from_panel",
+            new=AsyncMock(return_value=500),
+        ),
+        patch.object(ClaimDailyStaminaPacks, "_use_stamina_potions", new=potion_mock),
+    ):
+        result = _run(ClaimDailyStaminaPacks().execute(ctx))
+    assert result.status == "success"
+    potion_mock.assert_not_called()
+    assert result.data["potions_used"] == {}
+
+
+def test_daily_stamina_skips_potions_when_stamina_unreadable():
+    """Cannot read panel stamina → conservative skip (never guess potions)."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    potion_mock = AsyncMock(return_value={})
+    with (
+        patch(_WAKE_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch(_RETURN_TO_HUB_RUN, AsyncMock(return_value=OpResult(success=True))),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina",
+            new=AsyncMock(side_effect=[160, 160]),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_open_stamina_panel",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_claim_packs",
+            new=AsyncMock(return_value=2),
+        ),
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_stamina_from_panel",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(ClaimDailyStaminaPacks, "_use_stamina_potions", new=potion_mock),
+    ):
+        result = _run(ClaimDailyStaminaPacks().execute(ctx))
+    assert result.status == "success"
+    potion_mock.assert_not_called()
+
+
+def test_use_stamina_potions_mismatch_cancels():
+    """OCR total mismatch vs planned selection → cancel, no potion used."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    task = ClaimDailyStaminaPacks()
+    with (
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_selection_total",
+            new=AsyncMock(return_value=999),  # != planned 360
+        ),
+        patch.object(ClaimDailyStaminaPacks, "_cancel_selection", new=AsyncMock()) as cancel,
+    ):
+        result = _run(task._use_stamina_potions(ctx, 341, None))
+    assert result == {}
+    cancel.assert_awaited_once()
+
+
+def test_use_stamina_potions_zero_total_cancels():
+    """Selection total reads 0 → nothing got selected → cancel."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    task = ClaimDailyStaminaPacks()
+    with (
+        patch.object(
+            ClaimDailyStaminaPacks, "_read_selection_total",
+            new=AsyncMock(return_value=0),
+        ),
+        patch.object(ClaimDailyStaminaPacks, "_cancel_selection", new=AsyncMock()) as cancel,
+    ):
+        result = _run(task._use_stamina_potions(ctx, 341, None))
+    assert result == {}
+    cancel.assert_awaited_once()
