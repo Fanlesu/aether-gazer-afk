@@ -384,11 +384,11 @@ class JointSpecialOpsSweep:
     Navigation: hub → 前往作战 → 刻印 tab → 联合特勤 node → interior page
     Flow:
         1. Navigate to 联合特勤 interior page
-        2. OCR for S级 challenge card
-        3. If not found → click 刷新 (bottom right), retry up to 3 times
-        4. If S级 still not found after all attempts → return to hub (skip)
-        5. If S级 found → click it → min multiplier (<<) → max multiplier (>>)
-           → 扫荡 → confirm → dismiss result
+        2. OCR for S级 challenge card (up to 3 refresh attempts)
+        3. If no S级 → A级 fallback (purple >15% on current screen)
+        4. If neither found → return to hub (skip)
+        5. If a card is found → click it → min multiplier (<<) → max
+           multiplier (>>) → 扫荡 → confirm → dismiss result
         6. Return to hub
 
     Sweep multiplier strategy same as JointDefenseSweep:
@@ -429,6 +429,17 @@ class JointSpecialOpsSweep:
 
     _MAX_REFRESH = 3
 
+    # HSV color signatures for card grades (cv2 convention: H 0-180,
+    # sampled as a ratio over a small ROI at each grade icon).
+    # S级 = red icon; A级 = purple icon (fallback when S never appears).
+    _RED_HSV = (
+        ((0, 80, 100), (15, 255, 255)),
+        ((165, 80, 100), (180, 255, 255)),
+    )
+    _PURPLE_HSV = (
+        ((125, 80, 100), (160, 255, 255)),
+    )
+
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
 
@@ -451,18 +462,26 @@ class JointSpecialOpsSweep:
                     status="failed", message="Navigation to 联合特勤 failed"
                 )
 
-            # Step 3: Find S级 (with refresh retries)
+            # Step 3: Find S级 (with refresh retries), then A级 fallback
             ctx.logger.info("[Step 3] Search for S级 challenge")
             s_found = await self._find_and_select_s_rank(ctx)
             if not s_found:
                 ctx.logger.info(
-                    "[Step 3] S级 not found after all attempts, returning to hub"
+                    "[Step 3] S级 not found — falling back to A级 check"
+                )
+                s_found = await self._find_and_select_a_rank(ctx)
+            if not s_found:
+                ctx.logger.info(
+                    "[Step 3] S/A级 not found after all attempts, "
+                    "returning to hub"
                 )
                 await PressKeyOp(VK_ESCAPE, wait=1.0).run(ctx)
                 await ReturnToHubAction().run(ctx)
-                ctx.logger.info("=== JointSpecialOpsSweep: skipped (no S级) ===")
+                ctx.logger.info(
+                    "=== JointSpecialOpsSweep: skipped (no S/A级) ==="
+                )
                 return TaskResult(
-                    status="skipped", message="S级未找到，已返回大厅"
+                    status="skipped", message="S/A级未找到，已返回大厅"
                 )
 
             # Step 4: Min → Max multiplier → Sweep
@@ -565,59 +584,88 @@ class JointSpecialOpsSweep:
         return True
 
     # ------------------------------------------------------------------
-    # Find S级 with refresh retries
+    # Card-grade color scanning
     # ------------------------------------------------------------------
 
-    async def _find_and_select_s_rank(self, ctx: TaskContext) -> bool:
-        """Find S-rank card by checking color at 3 fixed grade icon positions.
+    async def _select_card_by_color(
+        self,
+        ctx: TaskContext,
+        label: str,
+        hsv_ranges: tuple,
+        threshold: int = 15,
+    ) -> bool:
+        """Scan the 3 fixed grade-icon positions for a color signature.
 
-        Each card's grade icon (S/B/A) is at a known position. Sample a 60x60
-        region around each, check HSV red percentage — red > 15% means S-rank.
+        Each card's grade icon is at a known position. Sample a 20x10 ROI
+        around it, measure the HSV-range pixel percentage, and click the
+        first card exceeding `threshold` (percent).
+
+        Args:
+            label: log label, e.g. "S级" / "A级".
+            hsv_ranges: tuple of ((h,s,v), (h,s,v)) HSV bounds (cv2
+                convention, H 0-180); multiple ranges are summed (red
+                wraps the hue circle).
         """
         import cv2
         import numpy as np
 
-        _SAMPLE_HW = (10, 5)  # half-width, half-height → 20x10 pixel region
-        _RED_THRESHOLD = 15  # percent
+        sample_hw = (10, 5)  # half-width, half-height → 20x10 pixel region
 
+        img = ctx.device.screenshot()
+        ih, iw = img.shape[:2]
+
+        for i, (fx, fy) in enumerate(self._CARD_GRADE_POSITIONS):
+            px = int(fx * iw)
+            py = int(fy * ih)
+            rw, rh = sample_hw
+
+            x1, y1 = max(0, px - rw), max(0, py - rh)
+            x2, y2 = min(iw, px + rw), min(ih, py + rh)
+            roi = img[y1:y2, x1:x2]
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+            # countNonZero counts single-channel pixels; divide by roi
+            # w*h (not roi.size, which includes the 3 channels) to get a
+            # true percentage.
+            roi_pixels = roi.shape[0] * roi.shape[1]
+            count = sum(
+                cv2.countNonZero(cv2.inRange(hsv, np.array(low), np.array(high)))
+                for low, high in hsv_ranges
+            )
+            pct = count / roi_pixels * 100
+
+            ctx.logger.info(
+                f"[joint_ops] Card {i+1} at ({fx:.3f},{fy:.3f}): "
+                f"{label}={pct:.1f}%"
+            )
+
+            if pct > threshold:
+                ctx.logger.info(
+                    f"[joint_ops] {label} found at card {i+1}! "
+                    f"Clicking ({fx:.3f}, {fy:.3f})"
+                )
+                await ClickOp(fx, fy, wait=1.5).run(ctx)
+                return True
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Find S级 with refresh retries, then A级 fallback
+    # ------------------------------------------------------------------
+
+    async def _find_and_select_s_rank(self, ctx: TaskContext) -> bool:
+        """Find S-rank card by checking red percentage at the 3 grade-icon
+        positions (red > 15% means S-rank). Refreshes between attempts.
+        """
         for attempt in range(1, self._MAX_REFRESH + 1):
             ctx.logger.info(
                 f"[joint_ops] Attempt {attempt}/{self._MAX_REFRESH}: "
                 f"checking 3 card positions for S级"
             )
-            img = ctx.device.screenshot()
-            ih, iw = img.shape[:2]
-
-            for i, (fx, fy) in enumerate(self._CARD_GRADE_POSITIONS):
-                px = int(fx * iw)
-                py = int(fy * ih)
-                rw, rh = _SAMPLE_HW
-
-                x1, y1 = max(0, px - rw), max(0, py - rh)
-                x2, y2 = min(iw, px + rw), min(ih, py + rh)
-                roi = img[y1:y2, x1:x2]
-                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
-                m1 = cv2.inRange(hsv, np.array([0, 80, 100]), np.array([15, 255, 255]))
-                m2 = cv2.inRange(hsv, np.array([165, 80, 100]), np.array([180, 255, 255]))
-                # Red pixel percentage over the ROI. countNonZero counts
-                # single-channel pixels; divide by roi w*h (not roi.size,
-                # which includes the 3 channels) to get a true percentage.
-                roi_pixels = roi.shape[0] * roi.shape[1]
-                red_pct = (cv2.countNonZero(m1) + cv2.countNonZero(m2)) / roi_pixels * 100
-
-                ctx.logger.info(
-                    f"[joint_ops] Card {i+1} at ({fx:.3f},{fy:.3f}): "
-                    f"red={red_pct:.1f}%"
-                )
-
-                if red_pct > _RED_THRESHOLD:
-                    ctx.logger.info(
-                        f"[joint_ops] S级 found at card {i+1}! "
-                        f"Clicking ({fx:.3f}, {fy:.3f})"
-                    )
-                    await ClickOp(fx, fy, wait=1.5).run(ctx)
-                    return True
+            if await self._select_card_by_color(
+                ctx, "S级", self._RED_HSV,
+            ):
+                return True
 
             ctx.logger.info(
                 f"[joint_ops] No S级 found (attempt {attempt})"
@@ -650,6 +698,21 @@ class JointSpecialOpsSweep:
             "[joint_ops] S级 not found after all refresh attempts"
         )
         return False
+
+    async def _find_and_select_a_rank(self, ctx: TaskContext) -> bool:
+        """Fallback after S-rank misses: purple >15% at a grade-icon
+        position means A-rank — click it and continue the sweep flow.
+        Scans the CURRENT screen (no further refreshes).
+        """
+        ctx.logger.info(
+            "[joint_ops] Fallback: checking for A级 (purple) on current cards"
+        )
+        found = await self._select_card_by_color(
+            ctx, "A级", self._PURPLE_HSV,
+        )
+        if not found:
+            ctx.logger.warning("[joint_ops] A级 not found either")
+        return found
 
     # ------------------------------------------------------------------
     # Min → Max multiplier → Sweep
