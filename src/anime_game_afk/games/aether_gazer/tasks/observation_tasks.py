@@ -293,6 +293,12 @@ class TacticsTaskClaim:
     # Red dot on the 对策协议 hub icon (coord-picker 实测 @hub). Gate the
     # whole task on it: no red dot ⇒ no pending rewards ⇒ skip.
     _TACTICS_RED_DOT = RED_DOTS["tactics"]
+    # Verified hub entry (docs/pages/aether_gazer/12_tactics.md): the
+    # 对策协议 icon on the hub's left panel — (100,170) @ 1600x900.
+    _HUB_ICON_X, _HUB_ICON_Y = 0.062, 0.189
+    # Stable on-page texts (docs 12_tactics.md "STABLE") used to verify the
+    # page actually opened after an entry attempt.
+    _PAGE_TEXTS = ("基础合约", "进阶合约", "经验值")
 
     async def can_run(self, ctx: TaskContext) -> bool:
         """Gate on the red dot on the 对策协议 hub icon.
@@ -311,13 +317,58 @@ class TacticsTaskClaim:
         )
         return check.passed
 
+    async def _on_tactics_page(self, ctx: TaskContext) -> bool:
+        """Verify the 对策协议 page is actually open via stable on-page text.
+
+        Uses the STABLE texts from docs/pages/aether_gazer/12_tactics.md —
+        any one hit confirms the page. Without this check every later step
+        would run blind on the hub and the task would fake "success".
+        """
+        for text in self._PAGE_TEXTS:
+            check = await FindTextCheck(target=text).evaluate(ctx)
+            if check.passed:
+                return True
+        return False
+
     async def execute(self, ctx: TaskContext) -> TaskResult:
         run_log: RunLog | None = getattr(ctx, "run_log", None)
         ctx.logger.info("=== TacticsTaskClaim: starting ===")
 
-        # Step 1: T → 对策协议
-        ctx.logger.info("[Step 1] Press T → 对策协议")
+        # Step 1: Enter 对策协议 — T shortcut (confirmed working in-game) is
+        # the primary entry; the verified hub-icon click is only a fallback.
+        # Every attempt is verified via stable on-page text (with one
+        # re-check after a short wait, since the page can take >1.5 s to
+        # load); if none succeeds, fail fast instead of running the
+        # remaining steps blind on the wrong page.
+        ctx.logger.info("[Step 1] Enter 对策协议 (T shortcut → verified icon click)")
         await PressKeyOp(VK_T, wait=1.5).run(ctx)
+        entered = await self._on_tactics_page(ctx)
+        if not entered:
+            # Page may still be loading — give it one more moment before
+            # concluding the T press failed.
+            await SleepOp(1.5).run(ctx)
+            entered = await self._on_tactics_page(ctx)
+        if entered:
+            ctx.logger.info("  [Step 1] T shortcut opened 对策协议")
+        if not entered:
+            ctx.logger.info(
+                "  [Step 1] T shortcut did not open the page — "
+                f"clicking hub icon ({self._HUB_ICON_X},{self._HUB_ICON_Y})"
+            )
+            await ClickOp(x=self._HUB_ICON_X, y=self._HUB_ICON_Y, wait=1.5).run(ctx)
+            entered = await self._on_tactics_page(ctx)
+        if not entered:
+            # One retry — a first click can be swallowed by UI transitions.
+            await ClickOp(x=self._HUB_ICON_X, y=self._HUB_ICON_Y, wait=1.5).run(ctx)
+            entered = await self._on_tactics_page(ctx)
+        if not entered:
+            ctx.logger.error("  [Step 1] could not enter 对策协议 — aborting")
+            if run_log:
+                run_log.snap(ctx.device, "tactics_enter_failed")
+            return TaskResult(
+                status="failed",
+                message="could not enter tactics page via shortcut or hub icon",
+            )
         if run_log:
             run_log.snap(ctx.device, "tactics_page")
 

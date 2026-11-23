@@ -212,3 +212,83 @@ def test_tactics_can_run_true_when_red_dot_present():
     ctx = _ctx()
     with patch(_RED_DOT_PATCH, _red_dot(0.30)):
         assert _run(TacticsTaskClaim().can_run(ctx)) is True
+
+
+# ── TacticsTaskClaim entry (Step 1) regression ──────────────────
+#
+# The T shortcut IS the confirmed in-game entry for 对策协议 (user-verified).
+# The old code pressed T blind and then ran every later step on whatever
+# page was actually shown, faking "success". The fixed flow: press T →
+# verify via stable on-page text (with one patient re-check — the page can
+# take >1.5 s to load) → hub-icon fallback only if T truly failed →
+# fail fast if nothing works. These tests lock that behaviour.
+
+_ON_PAGE_PATCH = (
+    "anime_game_afk.games.aether_gazer.tasks.observation_tasks"
+    ".TacticsTaskClaim._on_tactics_page"
+)
+_RETURN_RUN = (
+    "anime_game_afk.games.aether_gazer.ops.navigate.smart_return"
+    ".ReturnToHubAction.run"
+)
+_FIND_TEXT = (
+    "anime_game_afk.games.aether_gazer.tasks.observation_tasks"
+    ".FindTextCheck.evaluate"
+)
+
+
+def test_tactics_enters_via_hub_icon_when_shortcut_fails():
+    """T shortcut no-op (both checks) → verified fallback clicks the hub icon."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+    # Page check: False ×2 after T (initial + patient re-check), True after
+    # the icon click.
+    on_page = AsyncMock(side_effect=[False, False, True])
+    with (
+        patch(_ON_PAGE_PATCH, on_page),
+        patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert (0.062, 0.189) in device.click_log  # verified hub icon fallback
+
+
+def test_tactics_shortcut_ok_on_recheck_skips_icon_click():
+    """T works but the page loads slowly → the patient re-check catches it,
+    and the hub-icon fallback must NOT fire (it would leave the page)."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+    # Page check: False right after T (still loading), True on the re-check.
+    on_page = AsyncMock(side_effect=[False, True])
+    with (
+        patch(_ON_PAGE_PATCH, on_page),
+        patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert (0.062, 0.189) not in device.click_log
+    # The 任务-tab click must have run — we are on the page.
+    assert (0.101, 0.932) in device.click_log
+
+
+def test_tactics_fails_fast_when_entry_never_succeeds():
+    """Every entry attempt fails → task returns failed, no blind steps run."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+    with (
+        patch(_ON_PAGE_PATCH, AsyncMock(return_value=False)),
+        patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "failed"
+    # The 任务-tab click (0.101, 0.932) must NOT run — we never entered.
+    assert (0.101, 0.932) not in device.click_log
