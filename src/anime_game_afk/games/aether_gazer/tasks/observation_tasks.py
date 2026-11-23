@@ -18,6 +18,9 @@ from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import (
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import (
     ReturnToHubAction,
 )
+from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import (
+    WakeHubUiAction,
+)
 from anime_game_afk.games.aether_gazer.ops.primitives import (
     ClickOp,
     ClickPxOp,
@@ -140,7 +143,12 @@ class DailyWeeklyMissionClaim:
 
     async def can_run(self, ctx: TaskContext) -> bool:
         """Gate the task on the hub's mission red dot."""
-        ctx.logger.info("DailyWeeklyMissionClaim.can_run: hub red-dot check")
+        # can_run runs before execute (and before any wake step) — the hub
+        # UI can be idle/hidden here, making the dot invisible even though
+        # rewards are pending. Wake first; it is a no-op fast path when the
+        # hub is already active.
+        ctx.logger.info("DailyWeeklyMissionClaim.can_run: wake hub + red-dot check")
+        await WakeHubUiAction().run(ctx)
         check = await RedDotCheck(
             *_HUB_MISSION_RED_DOT, label="hub-mission",
         ).evaluate(ctx)
@@ -306,8 +314,17 @@ class TacticsTaskClaim:
         The icon itself is always present, so an existence check (OCR
         '对策协议') can't tell whether there are pending rewards. We instead
         gate on the red dot — only run when one is visible.
+
+        2026-11-23 fix: can_run executes before any wake step, and both
+        main_hub templates sit on the right half of the screen — the hub
+        can pass a template match while the left icon column (with the
+        tactics dot) is still idle-faded or covered by an overlay. The
+        dot check then reads 0.000 and the task silently skips despite
+        pending rewards (seen in the 22:48 run). Wake the hub UI first:
+        active hub → no-op fast path; idle/overlay → click to dismiss.
         """
-        ctx.logger.info("TacticsTaskClaim.can_run: red-dot check at hub")
+        ctx.logger.info("TacticsTaskClaim.can_run: wake hub + red-dot check")
+        await WakeHubUiAction().run(ctx)
         check = await RedDotCheck(
             *self._TACTICS_RED_DOT, label="tactics",
         ).evaluate(ctx)

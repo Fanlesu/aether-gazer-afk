@@ -50,6 +50,14 @@ _RED_DOT_PATCH = (
     ".RedDotCheck.evaluate"
 )
 
+# can_run wakes the hub UI before the red-dot check (2026-11-23 fix); patch
+# the wake action out in gate tests — its real path does template matching
+# plus clicks, which the mocked gate tests must not perform.
+_WAKE_PATCH = (
+    "anime_game_afk.games.aether_gazer.tasks.observation_tasks"
+    ".WakeHubUiAction.run"
+)
+
 
 def _red_dot(ratio: float):
     return AsyncMock(return_value=CheckResult(passed=ratio > 0, data=ratio))
@@ -67,14 +75,33 @@ def _claim_patch(found: bool):
 
 def test_dw_can_run_true_when_hub_dot_present():
     ctx = _ctx()
-    with patch(_RED_DOT_PATCH, _red_dot(0.35)):
+    with (
+        patch(_WAKE_PATCH, AsyncMock(return_value=None)),
+        patch(_RED_DOT_PATCH, _red_dot(0.35)),
+    ):
         assert _run(DailyWeeklyMissionClaim().can_run(ctx)) is True
 
 
 def test_dw_can_run_false_without_hub_dot():
     ctx = _ctx()
-    with patch(_RED_DOT_PATCH, _red_dot(0.0)):
+    with (
+        patch(_WAKE_PATCH, AsyncMock(return_value=None)),
+        patch(_RED_DOT_PATCH, _red_dot(0.0)),
+    ):
         assert _run(DailyWeeklyMissionClaim().can_run(ctx)) is False
+
+
+def test_dw_can_run_wakes_hub_before_dot_check():
+    """The gate must wake the hub UI first — the dot is invisible while
+    the hub is idle/overlay-covered even though rewards are pending."""
+    wake = AsyncMock(return_value=None)
+    ctx = _ctx()
+    with (
+        patch(_WAKE_PATCH, wake),
+        patch(_RED_DOT_PATCH, _red_dot(0.35)),
+    ):
+        assert _run(DailyWeeklyMissionClaim().can_run(ctx)) is True
+    wake.assert_awaited_once()
 
 
 # ── DailyWeeklyMissionClaim: execute skip path ─────────────────
@@ -203,15 +230,42 @@ def test_mimi_metadata():
 def test_tactics_can_run_false_without_red_dot():
     """TacticsTaskClaim skips when the 对策协议 hub icon has no red dot."""
     ctx = _ctx()
-    with patch(_RED_DOT_PATCH, _red_dot(0.0)):
+    with (
+        patch(_WAKE_PATCH, AsyncMock(return_value=None)),
+        patch(_RED_DOT_PATCH, _red_dot(0.0)),
+    ):
         assert _run(TacticsTaskClaim().can_run(ctx)) is False
 
 
 def test_tactics_can_run_true_when_red_dot_present():
     """TacticsTaskClaim runs when the 对策协议 hub icon shows a red dot."""
     ctx = _ctx()
-    with patch(_RED_DOT_PATCH, _red_dot(0.30)):
+    with (
+        patch(_WAKE_PATCH, AsyncMock(return_value=None)),
+        patch(_RED_DOT_PATCH, _red_dot(0.30)),
+    ):
         assert _run(TacticsTaskClaim().can_run(ctx)) is True
+
+
+def test_tactics_can_run_wakes_hub_before_dot_check():
+    """22:48 run regression: the red-dot gate read 0.000 because can_run
+    ran before any wake step and the left icon column was idle-faded /
+    overlay-covered (both main_hub templates live on the right half).
+    The gate must wake the hub UI *before* sampling the dot."""
+    calls: list[str] = []
+
+    async def _ordered_wake(self, ctx):
+        calls.append("wake")
+        return None
+
+    async def _ordered_dot(self, ctx):
+        calls.append("dot")
+        return CheckResult(passed=True, data=0.30)
+
+    ctx = _ctx()
+    with patch(_WAKE_PATCH, _ordered_wake), patch(_RED_DOT_PATCH, _ordered_dot):
+        assert _run(TacticsTaskClaim().can_run(ctx)) is True
+    assert calls == ["wake", "dot"]
 
 
 # ── TacticsTaskClaim entry (Step 1) regression ──────────────────
