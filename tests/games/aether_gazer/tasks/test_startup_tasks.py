@@ -233,7 +233,7 @@ class TestSkipStartupPopups:
         assert (0.157, 0.59) in device.click_log
 
     def test_handles_login_screen(self):
-        """Login screen gets a dismiss click."""
+        """Login screen gets a center click to enter (not a blind dismiss)."""
         device = MockDevice()
         ctx = TaskContext(device=device)
         task = SkipStartupPopups(max_attempts=3)
@@ -257,8 +257,27 @@ class TestSkipStartupPopups:
              patch(_OCR_OCR_ONCE, side_effect=mock_ocr_once):
             result = _run(task.execute(ctx))
 
-        # Simplified: clicks (0.157, 0.59) for login screen too
-        assert (0.157, 0.59) in device.click_log
+        assert result.status == "success"
+        # Login screen -> click center (0.5, 0.5) to enter.
+        assert (0.5, 0.5) in device.click_log
+
+    def test_reaches_hub_via_ocr_when_template_fails(self):
+        """On a 16:10 (or otherwise aspect-mismatched) screen the 16:9 hub
+        template cannot match, but the OCR keyword fallback must still
+        recognise the hub so an already-open game is not stuck.
+        """
+        device = MockDevice()
+        ctx = TaskContext(device=device)
+        task = SkipStartupPopups(max_attempts=3)
+
+        # Template matching always fails (simulates 16:10 full-bleed).
+        with patch(_PAGE_IS_ON_PAGE, return_value=False), \
+             patch(_PAGE_OCR_ONCE, return_value=_make_hub_ocr()), \
+             patch(_OCR_OCR_ONCE, return_value=_make_hub_ocr()):
+            result = _run(task.execute(ctx))
+
+        assert result.status == "success"
+        assert result.data["attempts"] == 0
 
     def test_fails_when_max_attempts_exceeded(self):
         """Returns failed when max attempts reached without hub."""
@@ -361,7 +380,7 @@ class TestSkipStartupPopups:
             result = _run(task.execute(ctx))
 
         assert result.status == "failed"
-        # The dismiss path also calls RapidClickAction (x=0.157, times=5);
+        # The dismiss path also calls RapidClickAction (x=0.157, times=10);
         # only the center-click interaction (x=0.5, y=0.5, times=3) must be absent.
         center_calls = [
             c for c in fake_cls.call_args_list

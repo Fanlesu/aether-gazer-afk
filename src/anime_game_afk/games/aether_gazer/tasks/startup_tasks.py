@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from anime_game_afk.games.aether_gazer.checks.ocr import OcrScanCheck
-from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck, OnPageCheck
+from anime_game_afk.games.aether_gazer.checks.page import AtHubCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ESCAPE
 from anime_game_afk.games.aether_gazer.ops.interact.rapid_click import RapidClickAction
 from anime_game_afk.games.aether_gazer.ops.primitives import (
@@ -47,6 +47,19 @@ class SkipStartupPopups:
         category: startup
         requires_ocr: True
         safe: True
+
+    The task is fully idempotent / state-aware: it inspects the current
+    screen on every attempt and only does what is needed. This means it is
+    safe to run whether the game was just launched (login screen / popups
+    showing) or the user already has it open at the hub. Specifically:
+
+    1. Hub check (template match + OCR keyword fallback, robust to 16:10
+       and idle hub) -> success.
+    2. Exit dialog ("退出游戏"/"是否退出") -> ESC to cancel.
+    3. Login screen ("进入游戏"/"点击任意区域") -> click center to enter.
+    4. Idle hub (UI hidden, music player visible) -> click center to wake.
+    5. Otherwise (loading / event popup / unknown) -> rapid-click a blank
+       area to dismiss.
     """
 
     name = "skip_startup_popups"
@@ -63,21 +76,24 @@ class SkipStartupPopups:
         return True
 
     async def execute(self, ctx: TaskContext) -> TaskResult:
-        """Dismiss startup popups by rapid-clicking until hub is confirmed.
-        
-        Only called when game was freshly launched (has startup popups).
+        """Bring the game to the hub from whatever screen it is on.
+
+        Idempotent and state-aware: it inspects the live screen each attempt
+        and only does what is needed (dismiss popups, click to enter a login
+        screen, wake an idle hub, or confirm the hub is already reached). Safe
+        to call whether the game was just launched or already open.
         """
         ctx.logger.info("=== SkipStartupPopups: starting ===")
         ctx.logger.info("  [startup] Dismissing startup popups")
 
         try:
             for attempt in range(self._max_attempts):
-                # ── Hub check with double-confirm ──
-                on_hub = await OnPageCheck(page="main_hub").evaluate(ctx)
-                if on_hub.passed:
+                # ── Hub check (template + OCR fallback; robust to 16:10) ──
+                hub = await AtHubCheck().evaluate(ctx)
+                if hub.passed:
                     ctx.logger.debug(f"  [startup] attempt {attempt}: hub detected, confirming")
                     await SleepOp(seconds=0.5).run(ctx)
-                    confirm = await OnPageCheck(page="main_hub").evaluate(ctx)
+                    confirm = await AtHubCheck().evaluate(ctx)
                     if confirm.passed:
                         ctx.logger.info(
                             f"  [startup] Hub confirmed after {attempt} attempts"
@@ -94,14 +110,33 @@ class SkipStartupPopups:
                 r = await OcrScanCheck().evaluate(ctx)
                 ocr = r.data if r.passed else None
                 if ocr and (ocr.has("退出游戏") or ocr.has("是否退出")):
-                    ctx.logger.info(f"  [startup] attempt {attempt}: exit dialog detected, pressing ESC")
+                    ctx.logger.info(f"  [startup] attempt {attempt}: exit dialog -> ESC")
                     await PressKeyOp(key=VK_ESCAPE, wait=1.0).run(ctx)
                     continue
 
-                # ── Rapid click blank area to dismiss popups ──
+                # ── Login screen — click anywhere to enter ──
+                # The game may already be showing the login prompt (e.g. the
+                # user opened it manually). Click the center to enter instead
+                # of relying on the generic blank-area dismiss.
+                if ocr and (ocr.has("进入游戏") or ocr.has("点击任意区域")):
+                    ctx.logger.info(f"  [startup] attempt {attempt}: login screen -> enter")
+                    await RapidClickAction(
+                        x=0.5, y=0.5, times=1, interval=0.15,
+                    ).run(ctx)
+                    continue
+
+                # ── Idle hub (UI hidden) — click center to wake ──
+                if hub.data.get("hub_state") == "idle":
+                    ctx.logger.info(f"  [startup] attempt {attempt}: idle hub -> wake")
+                    await RapidClickAction(
+                        x=0.5, y=0.5, times=1, interval=0.15,
+                    ).run(ctx)
+                    continue
+
+                # ── Rapid click blank area to dismiss popups / loading ──
                 ctx.logger.debug(f"  [startup] attempt {attempt}: rapid-clicking to dismiss popups")
                 await RapidClickAction(
-                    x=0.157, y=0.590, times=5, interval=0.15,
+                    x=0.157, y=0.590, times=10, interval=0.15,
                 ).run(ctx)
 
             # Max attempts exceeded — final check
