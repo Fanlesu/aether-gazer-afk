@@ -412,3 +412,66 @@ def test_tactics_weekly_tab_ocr_miss_falls_back_to_fixed_coords():
     assert (0.102, 0.282) in device.click_log
     # The old buggy behaviour clicked back (0.022, 0.039) here — must not.
     assert (0.022, 0.039) not in device.click_log
+
+
+def test_tactics_claims_challenge_tab_after_weekly():
+    """2026-11-23: the 挑战任务 tab is claimable too — after the weekly tab
+    the flow must click 挑战任务 (OCR-located) and claim there as well."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+
+    def _find():
+        async def _eval(self, ctx):
+            target = self._target
+            if target in ("本周任务", "挑战任务"):
+                # Distinguish via the tab's y: weekly ~205, challenge ~438
+                # (1280x720 canvas from the 2026-11-23 screenshot).
+                y = 205 if target == "本周任务" else 438
+                return CheckResult(
+                    passed=True,
+                    data=type("R", (), {"region": type(
+                        "Reg", (), {"x": 130, "y": y, "w": 80, "h": 30},
+                    )()})(),
+                )
+            if target == "一键领取":
+                return CheckResult(
+                    passed=True,
+                    data=type("R", (), {"region": type(
+                        "Reg", (), {"x": 1100, "y": 660, "w": 120, "h": 40},
+                    )()})(),
+                )
+            return CheckResult(passed=False)
+        return _eval
+
+    with (
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_FIND_TEXT, _find()),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert result.data["claimed_weekly"] is True
+    assert result.data["claimed_challenge"] is True
+    # 挑战任务 clicked at its OCR-derived center (170, 453) (same px/device
+    # resolution convention as the weekly-tab test above).
+    assert (170 / 1600, 453 / 900) in device.click_log
+
+
+def test_tactics_challenge_tab_ocr_miss_falls_back_to_fixed_coords():
+    """OCR miss on 挑战任务 → fixed measured coords (0.111, 0.406) are used
+    (2026-11-23 screenshot OCR 实测, three tabs evenly spaced)."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+    with (
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert result.data["claimed_challenge"] is False
+    assert (0.111, 0.406) in device.click_log
