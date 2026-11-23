@@ -12,14 +12,13 @@ from unittest.mock import MagicMock, call, patch
 import numpy as np
 import pytest
 
-from anime_game_afk.engine.device import DeviceAdapter
 from anime_game_afk.core.errors import (
     DeviceConnectionError,
     ScreenshotError,
     WindowNotFoundError,
 )
 from anime_game_afk.core.types import DeviceConfig, Resolution
-
+from anime_game_afk.engine.device import DeviceAdapter
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -263,6 +262,91 @@ def test_connect_allows_non_16_9_aspect_ratio() -> None:
     assert img.shape == (720, 1280, 3)
 
 
+def test_connect_falls_back_when_preferred_screencap_reports_zero_resolution() -> None:
+    """A 0x0 resolution from the preferred screencap method (e.g. FramePool
+    failing its D3D11 device creation under RDP / sandbox / no-GPU sessions)
+    must trigger the DXGI/GDI fallback chain instead of being accepted as a
+    "successful" connection.
+
+    Regression for the bug where ``_finish_connection`` never validated the
+    captured resolution, so a dead FramePool produced ``resolution=0x0``, every
+    later ``screenshot()`` died with "Failed to get cached image", and the
+    fallback chain never ran.
+    """
+    from maa.define import MaaWin32ScreencapMethodEnum
+
+    cfg = DeviceConfig(
+        window_title="TestWindow",
+        screencap_method=MaaWin32ScreencapMethodEnum.FramePool,
+        mouse_method=256,
+        keyboard_method=256,
+    )
+    adapter = DeviceAdapter(cfg)
+
+    def factory(
+        hwnd=None,
+        screencap_method=None,
+        mouse_method=None,
+        keyboard_method=None,
+        **kwargs: Any,
+    ) -> MagicMock:
+        # FramePool → dead (0x0, simulates D3D11 failure); any other method →
+        # working (1920x1080).
+        if screencap_method == MaaWin32ScreencapMethodEnum.FramePool:
+            return _make_controller_mock(resolution=(0, 0))
+        return _make_controller_mock(resolution=(1920, 1080))
+
+    with (
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
+        patch(
+            "anime_game_afk.engine.device.Win32Controller",
+            side_effect=factory,
+        ) as mock_ctrl,
+    ):
+        mock_toolkit.find_desktop_windows.return_value = [
+            _fake_window("TestWindow")
+        ]
+        adapter.connect()
+
+    assert adapter.connected
+    assert adapter.actual_resolution == Resolution(1920, 1080)
+    # Fallback chain must have been exercised: preferred tried first, then a
+    # working method. (Before the fix only the preferred was tried and 0x0 was
+    # wrongly accepted as success.)
+    assert mock_ctrl.call_count >= 2
+
+
+def test_connect_raises_when_all_screencap_methods_report_zero_resolution() -> None:
+    """Regression: a 0x0 resolution must NOT be accepted as a successful
+    connection. If every method in the fallback chain reports 0x0, connect()
+    must raise DeviceConnectionError and exhaust the whole chain.
+    """
+    cfg = DeviceConfig(
+        window_title="TestWindow",
+        screencap_method=4,
+        mouse_method=256,
+        keyboard_method=256,
+    )
+    adapter = DeviceAdapter(cfg)
+
+    with (
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
+        patch(
+            "anime_game_afk.engine.device.Win32Controller",
+            return_value=_make_controller_mock(resolution=(0, 0)),
+        ) as mock_ctrl,
+    ):
+        mock_toolkit.find_desktop_windows.return_value = [
+            _fake_window("TestWindow")
+        ]
+        with pytest.raises(DeviceConnectionError):
+            adapter.connect()
+
+    # Every method in the fallback chain must have been attempted (before the
+    # fix only the preferred was tried, then silently "succeeded" with 0x0).
+    assert mock_ctrl.call_count >= 2
+
+
 def test_screenshot_normalizes_16_10_window_with_letterbox() -> None:
     """A 2560x1600 (16:10) window running a 16:9 game normalizes to 1280x720.
 
@@ -300,6 +384,86 @@ def test_screenshot_normalizes_16_10_window_with_letterbox() -> None:
     # White marker must land near the centre of the normalized canvas.
     marker_patch = out[350:370, 630:650]
     assert marker_patch.mean() > 200
+
+
+def test_click_maps_through_viewport_crop_for_16_10_window() -> None:
+    """Regression: on a 16:10 window running a 16:9 game, click(fx, fy) must
+    map fractional coords into the cropped 16:9 game viewport, not the full
+    window.
+
+    Without this, clicks land inside the top/bottom letterbox bars or are
+    vertically shifted, so popup-dismiss / navigation clicks miss and the tool
+    loops clicking the same (wrong) spot — exactly the "keeps clicking the
+    login-page position" symptom at 2560x1600.
+
+    Builds a 2560x1600 capture with black letterbox bars (top/bottom 80px) so
+    auto_viewport detects the centered 16:9 viewport (0, 80, 2560, 1440).
+    """
+    raw_w, raw_h = 2560, 1600
+    img = np.zeros((raw_h, raw_w, 3), dtype=np.uint8)
+    game_h = int(raw_w / (1280 / 720))  # 1440
+    y0 = (raw_h - game_h) // 2            # 80
+    img[y0 : y0 + game_h, :, :] = 128     # grey game region (bars stay black)
+
+    cfg = _make_config()
+    adapter = DeviceAdapter(cfg)
+    ctrl_mock = _make_controller_mock(
+        resolution=(raw_w, raw_h), screencap_img=img
+    )
+    with (
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
+        patch(
+            "anime_game_afk.engine.device.Win32Controller",
+            return_value=ctrl_mock,
+        ),
+    ):
+        mock_toolkit.find_desktop_windows.return_value = [
+            _fake_window("TestWindow")
+        ]
+        adapter.connect()
+
+    # Fractional coords are relative to the cropped viewport (0, 80, 2560, 1440).
+    adapter.click(0.0, 0.0)
+    adapter.click(1.0, 1.0)
+    adapter.click(0.5, 0.5)
+    calls = ctrl_mock.post_click.call_args_list
+    assert calls[0] == call(0, 80)        # viewport top-left
+    assert calls[1] == call(2560, 1520)   # viewport bottom-right
+    assert calls[2] == call(1280, 800)    # viewport center
+
+
+def test_auto_viewport_skips_crop_when_game_full_bleed_no_bars() -> None:
+    """Regression: a 2560x1600 window whose game fills the frame with NO
+    letterbox bars must NOT be blind-cropped to 16:9.
+
+    A 16:10 game rendered full-bleed on a 16:10 display has no bars. The old
+    geometry-only heuristic cropped (0, 80, 2560, 1440), slicing off real game
+    content (top/bottom 80px) and breaking template matching — the root cause
+    of "keeps clicking the login-page position" at 2560x1600 with no bars.
+    Now we verify the bars are actually dark; with none present we keep the
+    whole window and warn instead of mis-cropping.
+    """
+    raw_w, raw_h = 2560, 1600
+    img = np.full((raw_h, raw_w, 3), 128, dtype=np.uint8)  # full-bleed, no bars
+
+    cfg = _make_config()
+    adapter = DeviceAdapter(cfg)
+    ctrl_mock = _make_controller_mock(resolution=(raw_w, raw_h), screencap_img=img)
+    with (
+        patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
+        patch("anime_game_afk.engine.device.Win32Controller", return_value=ctrl_mock),
+    ):
+        mock_toolkit.find_desktop_windows.return_value = [_fake_window("TestWindow")]
+        adapter.connect()
+
+    # No viewport crop — whole window is the game (no bars to remove).
+    assert adapter._viewport_crop is None
+    # click() maps into the whole window, not a 16:9 sub-rect.
+    adapter.click(0.0, 0.0)
+    adapter.click(1.0, 1.0)
+    calls = ctrl_mock.post_click.call_args_list
+    assert calls[0] == call(0, 0)
+    assert calls[1] == call(2560, 1600)
 
 
 # ---------------------------------------------------------------------------
@@ -466,11 +630,6 @@ def test_screenshot_raises_when_get_returns_none() -> None:
     cfg = _make_config()
     adapter = DeviceAdapter(cfg)
     ctrl_mock = _make_controller_mock()
-    # Override the screencap chain so .get() returns None
-    screencap_job = MagicMock()
-    screencap_job.wait.return_value = screencap_job
-    screencap_job.get.return_value = None
-    ctrl_mock.post_screencap.return_value = screencap_job
 
     with (
         patch("anime_game_afk.engine.device.Toolkit") as mock_toolkit,
@@ -482,13 +641,17 @@ def test_screenshot_raises_when_get_returns_none() -> None:
         mock_toolkit.find_desktop_windows.return_value = [
             _fake_window("TestWindow")
         ]
-        # connect() calls post_screencap internally; give it a valid image
-        # by swapping after connect is done
+        # connect() succeeds with a valid screencap (the default mock image).
         adapter.connect()
-        # Now swap to None-returning mock
-        adapter._controller = ctrl_mock  # type: ignore[assignment]
-        with pytest.raises(ScreenshotError):
-            adapter.screenshot()
+
+    # Now swap in a None-returning screencap so screenshot() must raise.
+    screencap_job = MagicMock()
+    screencap_job.wait.return_value = screencap_job
+    screencap_job.get.return_value = None
+    ctrl_mock.post_screencap.return_value = screencap_job
+
+    with pytest.raises(ScreenshotError):
+        adapter.screenshot()
 
 
 # ---------------------------------------------------------------------------
@@ -542,11 +705,12 @@ def test_release_all_held_keys_sends_keyup_for_recovery_set(
 
 def test_release_all_held_keys_no_controller_is_safe() -> None:
     """release_all_held_keys is a no-op when not connected (no exception)."""
-    from anime_game_afk.config.models import GameConfig
     from maa.define import (
         MaaWin32InputMethodEnum,
         MaaWin32ScreencapMethodEnum,
     )
+
+    from anime_game_afk.config.models import GameConfig
     cfg = GameConfig(
         name="X",
         window_title="X",

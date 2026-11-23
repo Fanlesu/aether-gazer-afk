@@ -1,6 +1,10 @@
 """Activity tasks — event-based daily activities.
 
 JointDefenseSweep: Run sweep on 联防协议 (Joint Defense) activity.
+InvitationRewardClaim: Claim 见闻 rewards for each 邀约 (invitation) event.
+
+Shared navigation lives in :class:`_ActivityPageNav` (hub → activity page
+via the H shortcut label → back out to hub); both task classes inherit it.
 
 Uses mixed identification methods:
 - Fixed coord: hub elements, panel buttons (> >>)
@@ -10,18 +14,17 @@ Uses mixed identification methods:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from anime_game_afk.core.types import Rect
 from anime_game_afk.games.aether_gazer.checks.ocr import (
+    FindTextCheck,
     OcrResult,
     OcrScan,
     ocr_scan_with_retry,
 )
 from anime_game_afk.games.aether_gazer.checks.page import OnPageCheck
-from anime_game_afk.games.aether_gazer.checks.red_dot import RedDotCheck
 from anime_game_afk.games.aether_gazer.knowledge.keys import VK_ENTER, VK_ESCAPE
-from anime_game_afk.games.aether_gazer.knowledge.red_dots import RED_DOTS
 from anime_game_afk.games.aether_gazer.ops.navigate.smart_return import ReturnToHubAction
 from anime_game_afk.games.aether_gazer.ops.navigate.wake_hub_ui import WakeHubUiAction
 from anime_game_afk.games.aether_gazer.ops.primitives import (
@@ -38,7 +41,179 @@ if TYPE_CHECKING:
     from anime_game_afk.runtime.run_log import RunLog
 
 
-class JointDefenseSweep:
+class _ActivityPageNav:
+    """Shared navigation for activity-page tasks (联防协议 / 邀约奖励).
+
+    Owns the hub → activity-page entry (OCR the "H" shortcut label, click
+    just below it) and the back-out-to-hub walker. Subclasses supply their
+    own flow in between.
+    """
+
+    # OCR retry knobs shared by all activity-page tasks
+    _OCR_RETRIES = 2
+    _OCR_RETRY_DELAY = 1.5
+
+    # H shortcut label search region (right side of hub)
+    # At screenshot resolution (1280×720): x=1040..1200, y=80..160
+    _H_SEARCH_REGION = Rect(0.8125, 0.1111, 0.125, 0.1111)
+    # Activity list left column
+    _LEFT_COLUMN = Rect(0.0, 0.1111, 0.25, 0.7778)
+    # Back button (top-left), used to walk back out of sub-pages
+    _BACK_X, _BACK_Y = 0.022, 0.039
+
+    async def _ocr(
+        self,
+        ctx: TaskContext,
+        *,
+        region: Rect | None = None,
+        ready: Callable[[OcrResult], bool] | None = None,
+        retries: int | None = None,
+    ) -> OcrScan:
+        return await ocr_scan_with_retry(
+            ctx,
+            region=region,
+            retries=self._OCR_RETRIES if retries is None else retries,
+            retry_delay=self._OCR_RETRY_DELAY,
+            ready=ready,
+        )
+
+    async def _ensure_hub(
+        self, ctx: TaskContext, run_log: RunLog | None,
+        snap_label: str = "hub",
+    ) -> str | None:
+        """Wake + return to hub, then template-match-verify.
+
+        Returns ``None`` on success or a failure reason string (caller
+        turns it into a ``failed`` TaskResult message).
+        """
+        await WakeHubUiAction().run(ctx)
+        await SleepOp(seconds=0.15).run(ctx)
+        result = await ReturnToHubAction().run(ctx)
+        if not result.success:
+            ctx.logger.error("  hub: FAILED cannot return to hub")
+            return "Cannot return to hub"
+        await SleepOp(seconds=0.5).run(ctx)
+
+        # Verify hub via fast template match (~5ms).  Skip the OCR
+        # pre-check for "前往作战" — when the hub is in a transitional
+        # state right after returning, the text may flicker and trigger
+        # ~10s of OCR retries.  WakeHubUiAction already ran above and
+        # the template check below is the authoritative signal.
+        hub_check = await OnPageCheck(page="main_hub").evaluate(ctx)
+        if not hub_check.passed:
+            ctx.logger.warning(
+                "  hub: template mismatch after return; waking once more"
+            )
+            await WakeHubUiAction().run(ctx)
+            await SleepOp(seconds=0.3).run(ctx)
+            hub_check = await OnPageCheck(page="main_hub").evaluate(ctx)
+            if not hub_check.passed:
+                ctx.logger.error("  hub: not on hub after second wake")
+                return "Not on hub page"
+        if run_log:
+            run_log.snap(ctx.device, snap_label)
+        return None
+
+    async def _enter_activity_page(
+        self, ctx: TaskContext, run_log: RunLog | None,
+    ) -> bool:
+        """Find H label in hub, click ~50px below to enter activity page."""
+        # Find "H" label via OCR (small region for speed)
+        scan = await self._ocr(
+            ctx,
+            region=self._H_SEARCH_REGION,
+            ready=lambda ocr: any(item.text.strip() == "H" for item in ocr.items),
+        )
+        h_label = None
+        for item in scan.result.items:
+            if item.text.strip() == "H":
+                h_label = item
+                break
+
+        if h_label:
+            hx = h_label.region.x + h_label.region.w // 2
+            hy = h_label.region.y + h_label.region.h // 2
+            click_px = hx
+            # Activity entrance is ~50px below H (720p reference); scale to
+            # the screenshot the OCR ran on (scan.image).
+            _img_h = scan.image.shape[0]
+            click_py = hy + int(50 * _img_h / 720)
+            ctx.logger.info(
+                f"  nav: H found at ({hx},{hy}), "
+                f"clicking activity at ({click_px},{click_py})"
+            )
+            await ClickPxOp(px=click_px, py=click_py, wait=0.5).run(ctx)
+        else:
+            # Fallback from verified data.  Log what the region OCR *did*
+            # see — if it keeps reading a non-"H" label (icon glyph, other
+            # text) we can retarget the ready-check on the next run.
+            ctx.logger.debug(
+                f"  nav: H region OCR texts: "
+                f"{[i.text for i in scan.result.items]}"
+            )
+            click_x, click_y = 0.858, 0.211  # 1372,190 @ 1600x900
+            ctx.logger.warning(
+                f"  nav: H not found via OCR, "
+                f"using fallback ({click_x},{click_y})"
+            )
+            await ClickOp(x=click_x, y=click_y, wait=0.5).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "activity_page")
+
+        # Verify: one OCR pass to check for activity page keywords
+        scan = await self._ocr(
+            ctx,
+            ready=lambda ocr: (
+                ocr.has("前往挑战")
+                or ocr.has("福利")
+                or ocr.has("支线")
+                or ocr.has("协议")
+            ),
+        )
+        ocr = scan.result
+        if (
+            ocr.has("前往挑战")
+            or ocr.has("福利")
+            or ocr.has("支线")
+            or ocr.has("协议")
+        ):
+            ctx.logger.info("  nav: activity page verified")
+            return True
+
+        ctx.logger.warning("  nav: could not verify activity page")
+        return True  # Proceed anyway — later steps have their own verification
+
+    async def _safe_return_to_hub(self, ctx: TaskContext) -> None:
+        """Return to hub from any depth in the activity flow.
+
+        Alternates between back button and ESC, since some pages only
+        respond to one or the other. Checks for hub after each attempt
+        via template matching.
+        """
+        ctx.logger.info("  return: navigating back to hub")
+        for i in range(8):
+            hub_check = await OnPageCheck(page="main_hub").evaluate(ctx)
+            if hub_check.passed:
+                ctx.logger.info(f"  return: hub reached after {i} actions")
+                return
+
+            # Alternate: even = back button, odd = ESC
+            if i % 2 == 0:
+                ctx.logger.debug(
+                    f"  return: clicking back ({self._BACK_X},{self._BACK_Y}) [{i}]"
+                )
+                await ClickOp(x=self._BACK_X, y=self._BACK_Y, wait=1.0).run(ctx)
+            else:
+                ctx.logger.debug(f"  return: pressing ESC [{i}]")
+                await PressKeyOp(key=VK_ESCAPE, wait=1.0).run(ctx)
+
+        # Final fallback
+        ctx.logger.info("  return: using ReturnToHubAction as fallback")
+        await ReturnToHubAction().run(ctx)
+        await SleepOp(seconds=1.0).run(ctx)
+
+
+class JointDefenseSweep(_ActivityPageNav):
     """Sweep the 联防协议 (Joint Defense) activity — 震动 stage.
 
     Navigation:
@@ -70,11 +245,6 @@ class JointDefenseSweep:
     requires_ocr = True
     safe = False  # Consumes 吨吨值 (30 per sweep)
 
-    # H shortcut label search region (right side of hub)
-    # At screenshot resolution (1280×720): x=1040..1200, y=80..160
-    _H_SEARCH_REGION = Rect(0.8125, 0.1111, 0.125, 0.1111)
-    # Activity list left column
-    _LEFT_COLUMN = Rect(0.0, 0.1111, 0.25, 0.7778)
     # Multiplier buttons: 5-button layout << < [xN] > >>
     # Pixel-mapped from 008_jd_after_max_multi.jpg darkness scan:
     #   << button: half(590,355) = full(1180,710)  ← reset to min
@@ -84,29 +254,9 @@ class JointDefenseSweep:
     _MAX_MULTI_X = 0.97     # 1552 / 1600
     _MAX_MULTI_Y = 0.791    # 712 / 900
     _MAX_SCROLL_ATTEMPTS = 5
-    _OCR_RETRIES = 2
-    _OCR_RETRY_DELAY = 1.5
-    # Reward-entry red dot on the 联防协议 detail page (the page just before
-    # returning to hub). Gate the 一键领取 reward-claim on its presence.
-    _REWARD_RED_DOT_X, _REWARD_RED_DOT_Y = RED_DOTS["joint_defense_reward"]
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
-
-    async def _ocr(
-        self,
-        ctx: TaskContext,
-        *,
-        region: Rect | None = None,
-        ready: Callable[[OcrResult], bool] | None = None,
-    ) -> OcrScan:
-        return await ocr_scan_with_retry(
-            ctx,
-            region=region,
-            retries=self._OCR_RETRIES,
-            retry_delay=self._OCR_RETRY_DELAY,
-            ready=ready,
-        )
 
     async def execute(self, ctx: TaskContext) -> TaskResult:
         run_log: RunLog | None = getattr(ctx, "run_log", None)
@@ -115,32 +265,9 @@ class JointDefenseSweep:
 
         # ── Step 1: Return to hub ──
         ctx.logger.info("[Step 1] Return to hub")
-        await WakeHubUiAction().run(ctx)
-        await SleepOp(seconds=0.15).run(ctx)
-        result = await ReturnToHubAction().run(ctx)
-        if not result.success:
-            ctx.logger.error("[Step 1] FAILED: cannot return to hub")
-            return TaskResult(status="failed", message="Cannot return to hub")
-        await SleepOp(seconds=0.5).run(ctx)
-
-        # Verify hub via fast template match (~5ms).  Skip the OCR
-        # pre-check for "前往作战" — when the hub is in a transitional
-        # state right after returning, the text may flicker and trigger
-        # ~10s of OCR retries.  WakeHubUiAction already ran above and
-        # the template check below is the authoritative signal.
-        hub_check = await OnPageCheck(page="main_hub").evaluate(ctx)
-        if not hub_check.passed:
-            ctx.logger.warning(
-                "[Step 1] Hub template mismatch after return; waking once more"
-            )
-            await WakeHubUiAction().run(ctx)
-            await SleepOp(seconds=0.3).run(ctx)
-            hub_check = await OnPageCheck(page="main_hub").evaluate(ctx)
-            if not hub_check.passed:
-                ctx.logger.error("[Step 1] Not on hub after second wake")
-                return TaskResult(status="failed", message="Not on hub page")
-        if run_log:
-            run_log.snap(ctx.device, "jd_hub")
+        reason = await self._ensure_hub(ctx, run_log, snap_label="jd_hub")
+        if reason:
+            return TaskResult(status="failed", message=reason)
 
         # ── Step 2: Enter activity page ──
         ctx.logger.info("[Step 2] Enter activity page (below H button)")
@@ -219,73 +346,6 @@ class JointDefenseSweep:
             message="Joint Defense sweep completed",
             data={"stage": "震动"},
         )
-
-    # ------------------------------------------------------------------
-    # Step 2: Enter activity page
-    # ------------------------------------------------------------------
-
-    async def _enter_activity_page(
-        self, ctx: TaskContext, run_log: RunLog | None,
-    ) -> bool:
-        """Find H label in hub, click ~50px below to enter activity page."""
-        # Find "H" label via OCR (small region for speed)
-        scan = await self._ocr(
-            ctx,
-            region=self._H_SEARCH_REGION,
-            ready=lambda ocr: any(item.text.strip() == "H" for item in ocr.items),
-        )
-        h_label = None
-        for item in scan.result.items:
-            if item.text.strip() == "H":
-                h_label = item
-                break
-
-        if h_label:
-            hx = h_label.region.x + h_label.region.w // 2
-            hy = h_label.region.y + h_label.region.h // 2
-            click_px = hx
-            # Activity entrance is ~50px below H (720p reference); scale to
-            # the screenshot the OCR ran on (scan.image).
-            _img_h = scan.image.shape[0]
-            click_py = hy + int(50 * _img_h / 720)
-            ctx.logger.info(
-                f"  nav: H found at ({hx},{hy}), "
-                f"clicking activity at ({click_px},{click_py})"
-            )
-            await ClickPxOp(px=click_px, py=click_py, wait=0.5).run(ctx)
-        else:
-            # Fallback from verified data
-            click_x, click_y = 0.858, 0.211  # 1372,190 @ 1600x900
-            ctx.logger.warning(
-                f"  nav: H not found via OCR, "
-                f"using fallback ({click_x},{click_y})"
-            )
-            await ClickOp(x=click_x, y=click_y, wait=0.5).run(ctx)
-        if run_log:
-            run_log.snap(ctx.device, "jd_activity_page")
-
-        # Verify: one OCR pass to check for activity page keywords
-        scan = await self._ocr(
-            ctx,
-            ready=lambda ocr: (
-                ocr.has("前往挑战")
-                or ocr.has("福利")
-                or ocr.has("支线")
-                or ocr.has("协议")
-            ),
-        )
-        ocr = scan.result
-        if (
-            ocr.has("前往挑战")
-            or ocr.has("福利")
-            or ocr.has("支线")
-            or ocr.has("协议")
-        ):
-            ctx.logger.info("  nav: activity page verified")
-            return True
-
-        ctx.logger.warning("  nav: could not verify activity page")
-        return True  # Proceed anyway — later steps have their own verification
 
     # ------------------------------------------------------------------
     # Step 3: Find and click 联防协议
@@ -600,8 +660,14 @@ class JointDefenseSweep:
         """Navigate back to 联防协议 detail page and click 一键领取 rewards.
 
         After sweep dismissal, press back to return to the 联防协议 detail
-        page (where 前往挑战 was visible), then click the bottom-most orange
-        一键领取 button to claim all completion rewards.
+        page (where 前往挑战 was visible), then claim all completion rewards.
+
+        The claim is gated on OCR-detecting the "一键领取" button itself
+        rather than a red-dot badge. The button only exists when there is
+        something to claim, so detecting it is both the presence signal and
+        the click target — far more reliable than the previous single-pixel
+        red-dot gate, which produced false negatives (rewards present but the
+        step reported "no red dot" and never claimed).
         """
         # Navigate back from challenge map to 联防协议 detail page
         for i in range(4):
@@ -619,32 +685,24 @@ class JointDefenseSweep:
             )
             return
 
-        # ── Red-dot gate on the reward entry ──
-        # The 联防协议 detail page is the page immediately before returning to
-        # hub. Only claim rewards when the entry shows a red dot; otherwise
-        # skip this step (the caller still returns to hub afterwards).
-        shot = await ScreenshotOp().run(ctx)
-        dot_check = await RedDotCheck(
-            self._REWARD_RED_DOT_X, self._REWARD_RED_DOT_Y,
-            label="jd_reward", image=shot.data,
-        ).evaluate(ctx)
-        has_dot = dot_check.passed
-        ctx.logger.info(
-            f"  rewards: red dot on reward entry: {has_dot} "
-            f"(ratio={dot_check.data:.3f})"
-        )
-        if not has_dot:
-            ctx.logger.info("  rewards: no red dot — skipping reward claim")
+        # ── Gate the claim on the actual "一键领取" button ──
+        # The button only appears when there are pending rewards, so detecting
+        # it via OCR is both the "is there anything to claim?" signal and the
+        # click target. No red dot lookup → no false-negative skip.
+        claim_check = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if not claim_check.passed:
+            ctx.logger.info(
+                "  rewards: no '一键领取' button — nothing to claim, skipping"
+            )
             return
 
-        # Click bottom-most reward claim button (right side of task list)
-        # Verified from 07_joint_defense_detail.png — blue arrow icon at right
-        _REWARD_CLAIM_X, _REWARD_CLAIM_Y = 0.934, 0.829
+        btn = claim_check.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
         ctx.logger.info(
-            f"  rewards: clicking bottom 一键领取 at "
-            f"({_REWARD_CLAIM_X},{_REWARD_CLAIM_Y})"
+            f"  rewards: found '一键领取' at ({cx},{cy}) — claiming"
         )
-        await ClickOp(x=_REWARD_CLAIM_X, y=_REWARD_CLAIM_Y, wait=1.5).run(ctx)
+        await ClickPxOp(px=cx, py=cy, wait=1.5).run(ctx)
 
         # Dismiss any reward popup
         await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
@@ -652,33 +710,302 @@ class JointDefenseSweep:
         if run_log:
             run_log.snap(ctx.device, "jd_rewards_collected")
 
-    # ------------------------------------------------------------------
-    # Safe return to hub
-    # ------------------------------------------------------------------
 
-    async def _safe_return_to_hub(self, ctx: TaskContext) -> None:
-        """Return to hub from any depth in the activity flow.
+class InvitationRewardClaim(_ActivityPageNav):
+    """邀约奖励 — claim 见闻 rewards for each invitation event.
 
-        Alternates between back button (35,35) and ESC, since some
-        pages only respond to one or the other. Checks for hub after
-        each attempt via template matching.
-        """
-        ctx.logger.info("  return: navigating back to hub")
-        for i in range(8):
-            hub_check = await OnPageCheck(page="main_hub").evaluate(ctx)
-            if hub_check.passed:
-                ctx.logger.info(f"  return: hub reached after {i} actions")
-                return
+    Flow (user-verified 2026-11-23, screenshot-confirmed):
+        hub → activity page (H shortcut) → for each title in the left
+        column — 夜宴之邀, 观星手记, 月色予梦, 咫尺身畔, 奇响派对:
+            1. click the title
+            2. OCR '前往邀约' → click
+            3. OCR '见闻' → click
+            4. OCR '一键领取' (preferred) or '领取' → click → Enter popup
+            5. back ×2 to the activity page
+        → return to hub
 
-            # Alternate: even = back button, odd = ESC
-            if i % 2 == 0:
-                ctx.logger.debug(f"  return: clicking back (0.022,0.039) [{i}]")
-                await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
+    Per-title failures (title / button not found — e.g. event locked or
+    not running) are logged and skipped; the loop continues with the
+    next title. Only a completely wrong page (no title found at all)
+    or a navigation failure fails the task.
+    """
+
+    name = "invitation_reward_claim"
+    description = "邀约奖励: 依次领取各邀约的见闻奖励"
+    category = "daily_activity"
+    requires_pages = ("main_hub",)
+    requires_ocr = True
+    safe = True  # claim-only, spends nothing
+
+    # Invitation titles in the activity page's left column, top to bottom.
+    # NOTE: the 5th event is 奇响派对 ("party") — an earlier 奇响排队 typo
+    # made OCR miss it every run (field log 2026-11-23).
+    _TITLES = ("夜宴之邀", "观星手记", "月色予梦", "咫尺身畔", "奇响派对")
+    _MAX_BACKS = 4  # back presses per return-to-activity-page attempt
+
+    async def can_run(self, ctx: TaskContext) -> bool:
+        return True
+
+    async def execute(self, ctx: TaskContext) -> TaskResult:
+        run_log: RunLog | None = getattr(ctx, "run_log", None)
+
+        ctx.logger.info("=== InvitationRewardClaim: starting ===")
+
+        # ── Step 1: Return to hub ──
+        ctx.logger.info("[Step 1] Return to hub")
+        reason = await self._ensure_hub(ctx, run_log, snap_label="inv_hub")
+        if reason:
+            return TaskResult(status="failed", message=reason)
+
+        # ── Step 2: Enter activity page ──
+        ctx.logger.info("[Step 2] Enter activity page (below H button)")
+        nav_ok = await self._enter_activity_page(ctx, run_log)
+        if not nav_ok:
+            return TaskResult(
+                status="failed", message="Cannot enter activity page"
+            )
+
+        # ── Step 3: Claim each invitation in order ──
+        claimed = 0
+        skipped = 0
+        titles_found = 0
+        for title in self._TITLES:
+            ctx.logger.info(f"[Step 3] Invitation '{title}'")
+            ok, found = await self._claim_one(ctx, title, run_log)
+            titles_found += found
+            if ok:
+                claimed += 1
             else:
-                ctx.logger.debug(f"  return: pressing ESC [{i}]")
-                await PressKeyOp(key=VK_ESCAPE, wait=1.0).run(ctx)
+                skipped += 1
+            # Back out to the activity page regardless of the outcome,
+            # so the next title attempt starts from a known state.
+            back_ok = await self._back_to_activity_page(ctx, run_log)
+            if not back_ok:
+                ctx.logger.error(
+                    f"[Step 3] could not return to activity page after "
+                    f"'{title}' — aborting"
+                )
+                return TaskResult(
+                    status="failed",
+                    message=f"Lost after '{title}' — could not return to "
+                            f"activity page",
+                )
 
-        # Final fallback
-        ctx.logger.info("  return: using ReturnToHubAction as fallback")
-        await ReturnToHubAction().run(ctx)
-        await SleepOp(seconds=1.0).run(ctx)
+        if titles_found == 0:
+            # Not a single title was found — we are almost certainly on
+            # the wrong page; report it instead of faking success.
+            # (All titles found but already claimed is a normal success.)
+            ctx.logger.error("[Step 3] no invitation title found at all")
+            return TaskResult(
+                status="failed",
+                message="No invitation title found on activity page",
+            )
+
+        # ── Step 4: Return to hub ──
+        ctx.logger.info("[Step 4] Return to hub")
+        await self._safe_return_to_hub(ctx)
+        if run_log:
+            run_log.snap(ctx.device, "inv_final_hub")
+
+        ctx.logger.info(
+            f"=== InvitationRewardClaim: complete "
+            f"(claimed={claimed}, skipped={skipped}) ==="
+        )
+        return TaskResult(
+            status="success",
+            message=f"邀约奖励领取完成 (claimed={claimed}, skipped={skipped})",
+            data={"claimed": claimed, "skipped": skipped},
+        )
+
+    # ------------------------------------------------------------------
+    # Per-title claim
+    # ------------------------------------------------------------------
+
+    async def _claim_one(
+        self, ctx: TaskContext, title: str, run_log: RunLog | None,
+    ) -> tuple[bool, bool]:
+        """Claim one invitation: title → 前往邀约 → 见闻 → 领取.
+
+        Returns ``(claimed, title_found)``:
+
+        - ``(True, True)`` — a claim button was clicked.
+        - ``(False, True)`` — the title was processed but there was
+          nothing to claim (already claimed / rewards unavailable).
+        - ``(False, False)`` — the title or a navigation target was
+          missing (event locked / not running); caller skips to the
+        next title and walks back to the activity page.
+        """
+        # 1. Click the title in the left column
+        scan = await self._ocr(
+            ctx,
+            region=self._LEFT_COLUMN,
+            ready=lambda ocr: ocr.find(title) is not None,
+        )
+        hit = scan.result.find(title)
+        if hit is None:
+            ctx.logger.info(f"  '{title}' not in left column — skipping")
+            return False, False
+        hx = hit.region.x + hit.region.w // 2
+        hy = hit.region.y + hit.region.h // 2
+        ctx.logger.info(f"  title: clicking '{title}' at ({hx},{hy})")
+        await ClickPxOp(px=hx, py=hy, wait=1.0).run(ctx)
+
+        # 2. Click 前往邀约 (兼容 '邀约')
+        scan = await self._ocr(
+            ctx,
+            ready=lambda ocr: (
+                ocr.find("前往邀约") is not None or ocr.find("邀约") is not None
+            ),
+        )
+        ocr = scan.result
+        btn = ocr.find("前往邀约")
+        if btn is None:
+            btn = ocr.find("邀约")
+        if btn is None:
+            ctx.logger.info(
+                f"  '{title}': 前往邀约 button not found — skipping"
+            )
+            return False, False
+        bx = btn.region.x + btn.region.w // 2
+        by = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  invite: clicking '{btn.text}' at ({bx},{by})")
+        await ClickPxOp(px=bx, py=by, wait=1.5).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, f"inv_{title}_entered")
+
+        # 3. Click 见闻
+        scan = await self._ocr(
+            ctx, ready=lambda ocr: ocr.find("见闻") is not None,
+        )
+        tab = scan.result.find("见闻")
+        if tab is None:
+            ctx.logger.info(f"  '{title}': 见闻 tab not found — skipping")
+            return False, False
+        tx = tab.region.x + tab.region.w // 2
+        ty = tab.region.y + tab.region.h // 2
+        ctx.logger.info(f"  tab: clicking '见闻' at ({tx},{ty})")
+        await ClickPxOp(px=tx, py=ty, wait=1.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, f"inv_{title}_jiwen")
+
+        # 4. Claim — prefer 一键领取, fall back to a plain 领取 that is
+        # NOT "已领取" (already claimed — a substring false-match that
+        # was clicked blindly in the field, 2026-11-23 log).
+        scan = await self._ocr(
+            ctx,
+            ready=lambda ocr: (
+                self._claimable(ocr) is not None or ocr.has("已领取")
+            ),
+        )
+        ocr = scan.result
+        claim = self._claimable(ocr)
+        if claim is None:
+            if ocr.has("已领取"):
+                ctx.logger.info(
+                    f"  '{title}': rewards already claimed — skipping"
+                )
+            else:
+                ctx.logger.info(f"  '{title}': nothing to claim — skipping")
+            return False, True
+        cx = claim.region.x + claim.region.w // 2
+        cy = claim.region.y + claim.region.h // 2
+        ctx.logger.info(
+            f"  claim: clicking '{claim.text}' at ({cx},{cy})"
+        )
+        await ClickPxOp(px=cx, py=cy, wait=1.5).run(ctx)
+
+        # Dismiss any reward popup
+        await PressKeyOp(key=VK_ENTER, wait=1.0).run(ctx)
+        if run_log:
+            run_log.snap(ctx.device, f"inv_{title}_claimed")
+        return True, True
+
+    @staticmethod
+    def _claimable(ocr: OcrResult) -> Any:
+        """Pick the claim button: 一键领取 preferred, else plain 领取.
+
+        "已领取" (already claimed) contains "领取" as a substring and
+        must never be clicked.
+        """
+        claim = ocr.find("一键领取")
+        if claim is not None:
+            return claim
+        for item in ocr.find_all("领取"):
+            if "已领取" not in item.text:
+                return item
+        return None
+
+    # ------------------------------------------------------------------
+    # Back out to the activity page
+    # ------------------------------------------------------------------
+
+    async def _on_activity_page(self, ctx: TaskContext) -> bool:
+        """OCR the left column: is the invitation list visible there?
+
+        Must require >=2 titles INSIDE the left-column region. Matching
+        "any title anywhere on screen" false-positived on the invite
+        sub-page, whose header shows the event title itself — the walker
+        then stopped one back-press short of the activity page and every
+        remaining title read as "not in left column" (field log
+        2026-11-23, 观星手记). Only the real activity page shows the
+        multi-entry list, so a 2-title threshold discriminates cleanly.
+        """
+        scan = await self._ocr(ctx, region=self._LEFT_COLUMN, retries=0)
+        ocr = scan.result
+        visible = sum(1 for t in self._TITLES if ocr.has(t))
+        return visible >= 2
+
+    async def _back_to_activity_page(
+        self, ctx: TaskContext, run_log: RunLog | None,
+    ) -> bool:
+        """Walk back to the activity page after one invitation.
+
+        Check-then-press loop: verify the markers first, and only press
+        the back button when the activity page is genuinely absent.
+        Two guards against overshoot (pressing *past* the activity page
+        into the hub, observed in the field 2026-11-23):
+
+        1. Settle re-check — a page transition animation can make the
+           verification OCR miss the markers right after a press; wait
+           briefly and re-check before pressing again.
+        2. Hub recovery — if the hub template matches we have already
+           gone too far; re-enter the activity page via the H shortcut
+           instead of pressing back again (which does nothing on hub).
+        """
+        for i in range(self._MAX_BACKS):
+            if await self._on_activity_page(ctx):
+                ctx.logger.info(f"  back: activity page after {i} presses")
+                return True
+
+            # Guard 2: overshot all the way to the hub → re-enter.
+            hub = await OnPageCheck(page="main_hub").evaluate(ctx)
+            if hub.passed:
+                ctx.logger.warning(
+                    "  back: overshot to hub — re-entering activity page"
+                )
+                if not await self._enter_activity_page(ctx, run_log):
+                    return False
+                if await self._on_activity_page(ctx):
+                    return True
+                # Still not verified (OCR flake) — keep walking back.
+
+            # Guard 1: settle re-check before pressing again.
+            await SleepOp(seconds=1.0).run(ctx)
+            if await self._on_activity_page(ctx):
+                ctx.logger.info(
+                    f"  back: activity page after settle ({i} presses)"
+                )
+                return True
+
+            ctx.logger.debug(f"  back: pressing back [{i}]")
+            await ClickOp(
+                x=self._BACK_X, y=self._BACK_Y, wait=1.5,
+            ).run(ctx)
+            if run_log:
+                run_log.snap(ctx.device, f"inv_back_{i}")
+
+        # Final verification — one more OCR pass after the last press
+        ok = await self._on_activity_page(ctx)
+        if not ok:
+            ctx.logger.warning("  back: activity page not re-verified")
+        return ok

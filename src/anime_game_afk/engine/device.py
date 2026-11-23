@@ -77,6 +77,14 @@ class DeviceAdapter:
 
         # Actual window resolution — set on connect(), None when disconnected.
         self._actual: Resolution | None = None
+        # Game viewport crop (x, y, w, h) in client-area pixels, resolved once
+        # at connect(). screenshot() crops to this rect before normalizing and
+        # click() maps fractional coords back through it, so recognition (which
+        # operates on the cropped, normalized canvas) and input always share
+        # one coordinate frame. None = use the whole window (16:9 windows land
+        # here). This is what fixes clicks landing inside letterbox bars or
+        # being vertically shifted on non-16:9 windows.
+        self._viewport_crop: tuple[int, int, int, int] | None = None
         # Last screenshot output dimensions (after proportional scaling).
         self._screenshot_res: Resolution | None = None
         self._input_lock = threading.Lock()
@@ -258,28 +266,81 @@ class DeviceAdapter:
         self._controller.post_screencap().wait()
 
         actual_w, actual_h = self._controller.resolution
+
+        # ── Validate the screencap is actually usable ──
+        # Maa's post_screencap() does NOT raise when the underlying capture
+        # unit fails to initialise (e.g. FramePool's D3D11 device creation
+        # fails under RDP / sandbox / no-GPU sessions); it merely reports a
+        # 0x0 resolution and yields no frame. Without this check the connection
+        # is treated as "successful" yet every later screenshot() dies with
+        # "Failed to get cached image", and the DXGI/GDI fallback chain in
+        # _connect_foreground never runs. Raise so the caller falls back.
+        if actual_w <= 0 or actual_h <= 0:
+            raise DeviceConnectionError(
+                f"screencap reported invalid resolution {actual_w}x{actual_h}"
+            )
+
+        # Smoke-test a real capture: a non-zero resolution with a dead capture
+        # unit must also be rejected. post_screencap().wait().get() returns
+        # None (or raises RuntimeError) when no frame was produced.
+        try:
+            _smoke = self._controller.post_screencap().wait().get()
+        except RuntimeError as exc:
+            raise DeviceConnectionError(
+                f"screencap smoke-test failed: {exc}"
+            ) from exc
+        if _smoke is None:
+            raise DeviceConnectionError(
+                "screencap smoke-test returned no frame"
+            )
+
         self._actual = Resolution(width=actual_w, height=actual_h)
+
+        # Resolve and cache the game viewport once. screenshot() and click()
+        # both use this rect, so recognition (operating on the viewport-cropped,
+        # normalized canvas) and input stay in the same coordinate frame. For a
+        # 16:9 window this is None (whole window); for a 16:10 window running a
+        # 16:9 game it is the centered 16:9 region (top/bottom letterbox bars
+        # cropped away). Without this, click() would map fractional coords to
+        # the full window and land every click shifted / inside the bars.
+        dw, dh = self._config.design_resolution
+        design_ar = dw / dh
+        self._viewport_crop = self._resolve_viewport(actual_w, actual_h, design_ar, img=_smoke)
 
         if actual_w > 0 and actual_h > 0:
             ratio = actual_w / actual_h
             if abs(ratio - 16 / 9) > 0.02:
-                # Resolution-agnostic since v0.5.x: the screenshot pipeline
-                # auto-crops letterbox bars and normalizes to the content
-                # pack's design_resolution, so non-16:9 windows (e.g. a 16:10
-                # laptop running a 16:9 game) work. Only warn — do NOT reject,
-                # because template matching is scale/aspect tolerant via the
-                # design-canvas normalization + multi-scale matching.
-                logger.warning(
-                    "Window aspect ratio {:.3f} ({}x{}) is not 16:9. "
-                    "Screenshot will auto-crop letterbox bars and normalize to the "
-                    "design canvas ({}x{}). If the game itself is not rendered at the "
-                    "design aspect ratio, template matching may be less reliable.",
-                    ratio,
-                    actual_w,
-                    actual_h,
-                    self._config.design_resolution[0],
-                    self._config.design_resolution[1],
-                )
+                if self._viewport_crop is None:
+                    # Window is non-16:9 and NO letterbox bars were detected, so
+                    # the game is almost certainly rendering at a non-16:9 aspect
+                    # ratio (e.g. a 16:10 game full-bleed on a 16:10 display).
+                    # The entire template/coordinate set targets a 16:9 game view
+                    # and WILL mis-match. Surface this loudly instead of silently
+                    # normalizing and mis-clicking.
+                    logger.warning(
+                        "Window aspect ratio {:.3f} ({}x{}) is not 16:9 AND no "
+                        "letterbox bars were detected. The game appears to render at "
+                        "a non-16:9 aspect ratio. All templates/coordinates target a "
+                        "16:9 game view and WILL mis-match. Fix: set the game to render "
+                        "at 16:9 (e.g. 2560x1440) so it letterboxes on this display.",
+                        ratio,
+                        actual_w,
+                        actual_h,
+                    )
+                else:
+                    # Resolution-agnostic since v0.5.x: a real 16:9 game on a
+                    # non-16:9 window letterboxes, we crop the bars and normalize
+                    # to the content pack's design_resolution.
+                    logger.warning(
+                        "Window aspect ratio {:.3f} ({}x{}) is not 16:9; detected "
+                        "letterbox bars and will auto-crop + normalize to the design "
+                        "canvas ({}x{}).",
+                        ratio,
+                        actual_w,
+                        actual_h,
+                        self._config.design_resolution[0],
+                        self._config.design_resolution[1],
+                    )
 
         logger.info(
             "Device connected: hwnd={}, resolution={}x{}, screencap={}, mouse={}, keyboard={}",
@@ -325,6 +386,7 @@ class DeviceAdapter:
         self._controller = None
         self._hwnd = None
         self._actual = None
+        self._viewport_crop = None
         self._screenshot_res = None
 
     # ------------------------------------------------------------------
@@ -367,10 +429,12 @@ class DeviceAdapter:
 
         raw_h, raw_w = img.shape[:2]
         dw, dh = self._config.design_resolution
-        design_ar = dw / dh
 
         # 1. Resolve the source region (game viewport) in raw pixel space.
-        crop = self._resolve_viewport(raw_w, raw_h, design_ar)
+        #    Use the rect cached at connect() so screenshots and clicks always
+        #    share the same coordinate frame (a 16:10 window must not have
+        #    clicks land inside its letterbox bars).
+        crop = self._viewport_crop
         if crop is not None:
             x, y, cw, ch = crop
             img = img[y : y + ch, x : x + cw]
@@ -420,15 +484,19 @@ class DeviceAdapter:
         raw_w: int,
         raw_h: int,
         design_ar: float,
+        img: np.ndarray | None = None,
     ) -> tuple[int, int, int, int] | None:
         """Compute the source crop rectangle (raw pixel space) for the game area.
 
         Priority:
         1. Explicit ``viewport`` (fractional rect) from config — used as-is.
         2. Auto-detect letterbox bars when the window aspect ratio differs
-           from the design aspect ratio (covers e.g. a 16:10 window running
-           a 16:9 game with top/bottom bars).
-        3. None — use the whole window (16:9 windows land here).
+           from the design aspect ratio. The candidate bars are VERIFIED to be
+           genuinely dark before cropping — a 16:10 game rendered full-bleed on
+           a 16:10 window has no bars, and blindly cropping it to 16:9 would
+           slice off real game content and break template matching.
+        3. None — use the whole window (16:9 windows, or non-16:9 windows whose
+           game fills the frame with no letterbox).
         """
         cfg = self._config
         if cfg.viewport is not None:
@@ -440,30 +508,76 @@ class DeviceAdapter:
             return (x, y, cw, ch)
 
         raw_ar = raw_w / raw_h
-        if cfg.auto_viewport and abs(raw_ar - design_ar) > 0.03:
-            detected = self._detect_letterbox_viewport(raw_w, raw_h, design_ar)
+        if cfg.auto_viewport and abs(raw_ar - design_ar) > 0.03 and img is not None:
+            detected = self._detect_letterbox_viewport(img, raw_w, raw_h, design_ar)
             if detected is not None:
                 return detected
         return None
 
     @staticmethod
     def _detect_letterbox_viewport(
+        img: np.ndarray,
         raw_w: int,
         raw_h: int,
         design_ar: float,
     ) -> tuple[int, int, int, int] | None:
-        """Estimate the game viewport assuming it is ``design_ar`` letterboxed.
+        """Detect and return a letterboxed game viewport, or None if no bars.
 
-        Primary strategy: the game is full-width and vertically centered, so
-        the game height is ``raw_w / design_ar`` and it is centered vertically.
-        This exactly covers the common case of a 16:9 game on a 16:10 window
-        (top/bottom letterbox bars). Returns None if the estimate is invalid.
+        Unlike a purely geometric estimate this VERIFIES the candidate
+        letterbox bars are actually dark before cropping. A 16:10 game rendered
+        full-bleed on a 16:10 window has no bars; blindly cropping it to 16:9
+        would slice off real game content (top/bottom 80px) and break template
+        matching. Only crop when the expected bar regions are genuinely
+        near-black.
         """
-        game_h = int(raw_w / design_ar)
-        if game_h <= 0 or game_h > raw_h:
-            return None
-        y0 = (raw_h - game_h) // 2
-        return (0, y0, raw_w, game_h)
+        raw_ar = raw_w / raw_h
+        if raw_ar < design_ar:
+            # Window narrower than design -> bars on top/bottom.
+            game_h = int(round(raw_w / design_ar))
+            if game_h <= 0 or game_h >= raw_h:
+                return None
+            bar = (raw_h - game_h) // 2
+            if bar <= 2:
+                return None
+            top_band = img[0:bar, :, :]
+            bot_band = img[raw_h - bar : raw_h, :, :]
+            if not DeviceAdapter._is_dark_band(top_band) or not DeviceAdapter._is_dark_band(
+                bot_band
+            ):
+                return None
+            y0 = (raw_h - game_h) // 2
+            return (0, y0, raw_w, game_h)
+        if raw_ar > design_ar:
+            # Window wider than design -> bars on left/right.
+            game_w = int(round(raw_h * design_ar))
+            if game_w <= 0 or game_w >= raw_w:
+                return None
+            bar = (raw_w - game_w) // 2
+            if bar <= 2:
+                return None
+            left_band = img[:, 0:bar, :]
+            right_band = img[:, raw_w - bar : raw_w, :]
+            if not DeviceAdapter._is_dark_band(left_band) or not DeviceAdapter._is_dark_band(
+                right_band
+            ):
+                return None
+            x0 = (raw_w - game_w) // 2
+            return (x0, 0, game_w, raw_h)
+        return None
+
+    @staticmethod
+    def _is_dark_band(band: np.ndarray) -> bool:
+        """True if a strip of pixels is essentially a solid dark (letterbox) bar.
+
+        Pure letterbox bars are ~0 luminance with negligible variance. A strict
+        threshold keeps dark-but-real UI edges from being mistaken for bars.
+        """
+        if band.size == 0:
+            return False
+        gray = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY) if band.shape[-1] == 3 else band
+        mean = float(gray.mean())
+        std = float(gray.std())
+        return mean < 12.0 and std < 8.0
 
     @staticmethod
     def _fit_to_canvas(img: np.ndarray, dw: int, dh: int) -> np.ndarray:
@@ -492,6 +606,18 @@ class DeviceAdapter:
         canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
         return canvas
 
+    def _effective_viewport(self) -> tuple[int, int, int, int]:
+        """Pixel rect (x, y, w, h) that fractional coords are relative to.
+
+        Equals the cached game viewport when one was detected at connect(),
+        otherwise the whole window. screenshot() crops to this same rect, so
+        recognition and click() stay in one coordinate frame.
+        """
+        if self._viewport_crop is not None:
+            return self._viewport_crop
+        assert self._actual is not None
+        return (0, 0, self._actual.width, self._actual.height)
+
     def click(self, fx: float, fy: float) -> None:
         """Send a mouse click at fractional coordinates.
 
@@ -508,8 +634,14 @@ class DeviceAdapter:
         assert self._controller is not None
         assert self._actual is not None
 
-        ax = int(fx * self._actual.width)
-        ay = int(fy * self._actual.height)
+        # Map the fractional coord into the same pixel rect that screenshot()
+        # crops to (the game viewport), NOT the raw window. On a 16:9 window the
+        # viewport is the whole window, so this is identical to before; on a
+        # 16:10 window it removes the letterbox offset/scale so clicks land on
+        # the actual game UI instead of inside the bars or shifted vertically.
+        vx, vy, vw, vh = self._effective_viewport()
+        ax = int(vx + fx * vw)
+        ay = int(vy + fy * vh)
         target_screen = self._client_to_screen(ax, ay)
         orig_cursor = self._get_cursor_pos()
 

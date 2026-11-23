@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-import pytest
 
 from anime_game_afk.core.types import Rect
 from anime_game_afk.vision.matcher import match_all, match_best, match_template
