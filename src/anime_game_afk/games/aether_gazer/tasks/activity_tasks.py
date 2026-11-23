@@ -741,7 +741,9 @@ class InvitationRewardClaim(_ActivityPageNav):
     # NOTE: the 5th event is 奇响派对 ("party") — an earlier 奇响排队 typo
     # made OCR miss it every run (field log 2026-11-23).
     _TITLES = ("夜宴之邀", "观星手记", "月色予梦", "咫尺身畔", "奇响派对")
-    _MAX_BACKS = 4  # back presses per return-to-activity-page attempt
+    # Field log 2026-11-23: a 一键领取 reward popup can consume an extra
+    # back press — returning once needed 3 presses. Keep headroom.
+    _MAX_BACKS = 5
 
     async def can_run(self, ctx: TaskContext) -> bool:
         return True
@@ -821,6 +823,27 @@ class InvitationRewardClaim(_ActivityPageNav):
     # Per-title claim
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _find_title(ocr: OcrResult, title: str) -> Any:
+        """Find a title item, tolerating OCR segmentation variance.
+
+        Exact substring first. RapidOCR occasionally splits a title into
+        separate items ("咫尺" + "身畔") or misreads one character, which
+        defeats exact matching forever (field log 2026-11-23: 咫尺身畔
+        never matched while its neighbours did, despite sitting in a
+        visibly empty slot between them). Fall back to any item sharing
+        a 2-char bigram with the title — titles are unique within the
+        left column, so a bigram hit is unambiguous.
+        """
+        hit = ocr.find(title)
+        if hit is not None:
+            return hit
+        bigrams = [title[i:i + 2] for i in range(len(title) - 1)]
+        for item in ocr.items:
+            if any(b in item.text for b in bigrams):
+                return item
+        return None
+
     async def _claim_one(
         self, ctx: TaskContext, title: str, run_log: RunLog | None,
     ) -> tuple[bool, bool]:
@@ -836,13 +859,39 @@ class InvitationRewardClaim(_ActivityPageNav):
         next title and walks back to the activity page.
         """
         # 1. Click the title in the left column
+        def _title_ready(ocr: OcrResult) -> bool:
+            return self._find_title(ocr, title) is not None
+
         scan = await self._ocr(
             ctx,
             region=self._LEFT_COLUMN,
-            ready=lambda ocr: ocr.find(title) is not None,
+            ready=_title_ready,
         )
-        hit = scan.result.find(title)
+        hit = self._find_title(scan.result, title)
         if hit is None:
+            # List may have been scrolled (selection auto-scroll) or OCR
+            # flaked — nudge the list both ways and rescan before giving
+            # up. Coordinates always come from live OCR, so a shifted
+            # list is harmless.
+            for swipe_up in (True, False):
+                await SwipeOp(
+                    x1=0.125, y1=0.55, x2=0.125,
+                    y2=0.3 if swipe_up else 0.8,
+                    duration=300, wait=0.6,
+                ).run(ctx)
+                scan = await self._ocr(
+                    ctx, region=self._LEFT_COLUMN, ready=_title_ready,
+                )
+                hit = self._find_title(scan.result, title)
+                if hit is not None:
+                    break
+        if hit is None:
+            # Diagnostic: log what the region OCR *did* read so a stubborn
+            # title can be retargeted from the next run's log.
+            ctx.logger.debug(
+                f"  '{title}' left column OCR texts: "
+                f"{[i.text for i in scan.result.items]}"
+            )
             ctx.logger.info(f"  '{title}' not in left column — skipping")
             return False, False
         hx = hit.region.x + hit.region.w // 2
@@ -952,7 +1001,10 @@ class InvitationRewardClaim(_ActivityPageNav):
         """
         scan = await self._ocr(ctx, region=self._LEFT_COLUMN, retries=0)
         ocr = scan.result
-        visible = sum(1 for t in self._TITLES if ocr.has(t))
+        visible = sum(
+            1 for t in self._TITLES
+            if self._find_title(ocr, t) is not None
+        )
         return visible >= 2
 
     async def _back_to_activity_page(

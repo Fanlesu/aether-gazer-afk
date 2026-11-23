@@ -193,7 +193,7 @@ def _fake_page(texts: list[str]):
         find=_find,
         find_all=_find_all,
         has=lambda t: any(t in x for x in texts),
-        items=[],  # _enter_activity_page iterates items for the H label
+        items=[_item(t) for t in texts],  # _find_title / H-label iteration
     )
     return SimpleNamespace(
         result=result, image=np.zeros((900, 1600, 3), dtype=np.uint8),
@@ -348,9 +348,9 @@ def test_invitation_execute_prefers_one_key_claim():
     pages.append(["见闻"])
     pages.append(["一键领取", "领取"])  # both visible
     pages.append(_ACTIVITY_PAGE)
-    # remaining titles missing entirely → skipped
+    # remaining titles missing entirely → skipped (miss + 2 scroll rescans)
     for _ in _TITLES[1:]:
-        pages.append([])
+        pages.extend([[], [], []])
         pages.append(_ACTIVITY_PAGE)
     _stub_ocr_pages(task, pages)
     result, clicks = _run_inv_execute(task, ctx)
@@ -369,7 +369,7 @@ def test_invitation_execute_fails_when_no_title_found():
     task = InvitationRewardClaim()
     pages = [[], ["福利"]]
     for _ in _TITLES:
-        pages.append([])        # title not in left column
+        pages.extend([[], [], []])  # title miss + 2 scroll rescans
         pages.append(_ACTIVITY_PAGE)  # back check OK
     _stub_ocr_pages(task, pages)
     result, _clicks = _run_inv_execute(task, ctx)
@@ -528,6 +528,95 @@ def test_on_activity_page_requires_two_titles_in_left_column():
     assert _run(task._on_activity_page(ctx)) is True
 
 
+def test_find_title_matches_split_and_misread_items():
+    """Regression (field 2026-11-23): 咫尺身畔 never matched exactly.
+
+    RapidOCR can split a title into separate items or misread a char,
+    so exact find() misses forever while neighbours match. The bigram
+    fallback must recover the hit (titles are unique in the left
+    column, so a 2-char overlap is unambiguous).
+    """
+    # Split into two OCR items → exact find fails, bigram recovers.
+    split = _fake_page(["咫尺", "身畔"]).result
+    assert InvitationRewardClaim._find_title(split, "咫尺身畔") is not None
+    # Misread char ("身胖" instead of "身畔") → bigram 咫尺 still hits.
+    misread = _fake_page(["咫尺身胖"]).result
+    assert InvitationRewardClaim._find_title(misread, "咫尺身畔") is not None
+    # Exact hit still preferred/works.
+    exact = _fake_page(["咫尺身畔"]).result
+    assert InvitationRewardClaim._find_title(exact, "咫尺身畔") is not None
+    # No overlap at all → None (no false positive).
+    other = _fake_page(["月色予梦", "奇响派对"]).result
+    assert InvitationRewardClaim._find_title(other, "咫尺身畔") is None
+
+
+def test_claim_one_scrolls_when_title_missing():
+    """Title not found → scroll the left column and rescan, then click.
+
+    Field 2026-11-23: 咫尺身畔 skipped after 3 static OCR misses; the
+    list may be auto-scrolled by a previous selection, so a static
+    retry alone can never see it.
+    """
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    task = InvitationRewardClaim()
+    pages = [
+        [],               # initial scan + retries → miss
+        ["咫尺身畔"],      # post-scroll rescan → hit
+        ["前往邀约"],
+        ["见闻"],
+        ["一键领取"],
+    ]
+    _stub_ocr_pages(task, pages)
+    swipes: list = []
+
+    class _SpySwipe:
+        def __init__(self, *a, **kw):
+            swipes.append(kw)
+
+        async def run(self, ctx):
+            return OpResult(success=True)
+
+    clicks, spy = _spy_clicks()
+    with (
+        patch(f"{_ACT}.SwipeOp", _SpySwipe),
+        patch(_CLICKPX, spy),
+        patch(_PRESS_RUN, AsyncMock(return_value=OpResult(success=True))),
+    ):
+        ok, found = _run(task._claim_one(ctx, "咫尺身畔", None))
+
+    assert (ok, found) == (True, True)
+    assert len(swipes) >= 1
+    assert ("px", 130, 212) in clicks  # title row center from OCR stub
+
+
+def test_claim_one_skips_after_scroll_miss():
+    """Title absent even after both scroll rescans → clean skip."""
+    device = MockDevice()
+    ctx = TaskContext(device=device)
+    task = InvitationRewardClaim()
+    _stub_ocr_pages(task, [[], [], []])  # initial + 2 post-scroll scans
+    swipes: list = []
+
+    class _SpySwipe:
+        def __init__(self, *a, **kw):
+            swipes.append(kw)
+
+        async def run(self, ctx):
+            return OpResult(success=True)
+
+    clicks, spy = _spy_clicks()
+    with (
+        patch(f"{_ACT}.SwipeOp", _SpySwipe),
+        patch(_CLICKPX, spy),
+    ):
+        ok, found = _run(task._claim_one(ctx, "咫尺身畔", None))
+
+    assert (ok, found) == (False, False)
+    assert len(swipes) == 2  # both directions tried
+    assert not any(kind == "px" for kind, _, _ in clicks)
+
+
 def test_ocr_accepts_retries_kwarg():
     """Regression (field crash 2026-11-23): _ocr() must forward `retries`.
 
@@ -598,9 +687,9 @@ def test_invitation_execute_already_claimed_is_success():
     pages.append(["见闻"])
     pages.append(["已领取"])
     pages.append(_ACTIVITY_PAGE)  # back check
-    # Remaining titles missing entirely → skipped
+    # Remaining titles missing entirely → skipped (miss + 2 scroll rescans)
     for _ in _TITLES[1:]:
-        pages.append([])
+        pages.extend([[], [], []])
         pages.append(_ACTIVITY_PAGE)
     _stub_ocr_pages(task, pages)
     result, clicks = _run_inv_execute(task, ctx)
