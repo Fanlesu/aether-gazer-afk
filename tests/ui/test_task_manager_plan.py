@@ -71,16 +71,18 @@ def test_save_plan_drops_unknown_ids(mgr) -> None:
     assert "ghost_task" not in _ids(mgr)
 
 
-def test_save_plan_forces_safe_enabled(mgr) -> None:
+def test_save_plan_respects_disabled_safe_task(mgr) -> None:
+    """Since v0.5.x, safe tasks may be disabled; save_plan must persist the
+    disabled state instead of forcing them back on."""
     plan = [
-        {"id": "startup", "enabled": False, "params": {}},       # safe -> forced on
-        {"id": "mail", "enabled": False, "params": {}},          # safe -> forced on
+        {"id": "startup", "enabled": False, "params": {}},       # safe -> stays off
+        {"id": "mail", "enabled": False, "params": {}},          # safe -> stays off
         {"id": "intel_shards", "enabled": False, "params": {}},  # non-safe -> stays off
     ]
     assert mgr.save_plan("daily_routine", plan) is True
     tasks = {t.id: t for t in mgr._pipelines[0].tasks}
-    assert tasks["startup"].enabled is True
-    assert tasks["mail"].enabled is True
+    assert tasks["startup"].enabled is False
+    assert tasks["mail"].enabled is False
     assert tasks["intel_shards"].enabled is False
 
 

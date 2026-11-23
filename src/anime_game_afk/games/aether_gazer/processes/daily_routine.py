@@ -6,9 +6,14 @@ lives in the shared :class:`WorkflowEngine` (``engine/workflow_engine``). This
 module only declares the process-specific pieces:
 
 * the task registry (id -> class/name/safe) and its default order, and
-* two process-specific behaviours that the generic engine does not know
-  about: return to hub between tasks, and the startup task only running
-  when the game was freshly launched.
+* one process-specific behaviour that the generic engine does not know
+  about: returning to the hub between tasks.
+
+The startup task (``SkipStartupPopups``) runs unconditionally and is
+idempotent / state-aware: it inspects the live screen and only does what is
+needed (dismiss popups, click to enter a login screen, wake an idle hub, or
+confirm the hub is already reached). This means the routine works whether the
+tool launched the game or the user already had it open.
 
 The public process id ``daily_routine`` is unchanged, so the registry,
 the frontend orchestrator, and the persisted plan JSON stay compatible.
@@ -33,6 +38,7 @@ from anime_game_afk.games.aether_gazer.processes.base import (
     ProcessResult,
 )
 from anime_game_afk.games.aether_gazer.tasks.activity_tasks import (
+    InvitationRewardClaim,
     JointDefenseSweep,
 )
 from anime_game_afk.games.aether_gazer.tasks.amusement_tasks import (
@@ -59,27 +65,31 @@ from anime_game_afk.games.aether_gazer.tasks.startup_tasks import (
     SkipStartupPopups,
 )
 
-# All daily tasks: (id, class, display_name, safe)
-_DAILY_TASKS: list[tuple[str, type, str, bool]] = [
-    ("startup", SkipStartupPopups, "启动游戏", True),
-    ("mail", CollectAllMail, "领取邮件", True),
-    ("intel_shards", BuyIntelShards, "购买情报", False),
-    ("stamina_packs", ClaimDailyStaminaPacks, "领取体力包", True),
-    ("free_stamina", ClaimFreeStamina, "商店免费体力", True),
-    ("mimi_station", MimiStationCollect, "弥弥观测站", True),
-    ("guild_supply", GuildSupplyClaim, "公会补给", True),
-    ("amusement", AmusementStreetDaily, "游园街日常", True),
-    ("joint_special_ops", JointSpecialOpsSweep, "联合特勤", False),
-    ("joint_defense", JointDefenseSweep, "联防协议", False),
-    ("medium_seizure", MediumSeizureCombat, "介质攫取", False),
-    ("missions", DailyWeeklyMissionClaim, "每日周常任务", True),
-    ("tactics", TacticsTaskClaim, "对策协议", True),
+# All daily tasks: (id, class, display_name, safe, default_enabled)
+# ``default_enabled`` is the initial checkbox state for FRESH configs only —
+# a saved ui_state.json always overrides it (user choice wins).
+_DAILY_TASKS: list[tuple[str, type, str, bool, bool]] = [
+    ("startup", SkipStartupPopups, "启动游戏", True, True),
+    ("mail", CollectAllMail, "领取邮件", True, True),
+    ("intel_shards", BuyIntelShards, "购买情报", False, True),
+    ("stamina_packs", ClaimDailyStaminaPacks, "领取体力包", True, True),
+    ("free_stamina", ClaimFreeStamina, "商店免费体力", True, True),
+    ("mimi_station", MimiStationCollect, "弥弥观测站", True, True),
+    ("guild_supply", GuildSupplyClaim, "公会补给", True, True),
+    ("amusement", AmusementStreetDaily, "游园街日常", True, True),
+    ("joint_special_ops", JointSpecialOpsSweep, "联合特勤", False, True),
+    # 默认不勾选：消耗吨吨值且"找震动"OCR 偶发失败，由用户按需启用
+    ("joint_defense", JointDefenseSweep, "联防协议", False, False),
+    ("medium_seizure", MediumSeizureCombat, "介质攫取", False, True),
+    ("missions", DailyWeeklyMissionClaim, "每日周常任务", True, True),
+    ("tactics", TacticsTaskClaim, "对策协议", True, True),
+    ("invitation_reward", InvitationRewardClaim, "邀约奖励", True, True),
 ]
 
 # Fast lookup consumed by the engine.
 _REGISTRY: dict[str, TaskMeta] = {
-    tid: TaskMeta(cls, name, safe)
-    for (tid, cls, name, safe) in _DAILY_TASKS
+    tid: TaskMeta(cls, name, safe, default_enabled=default_enabled)
+    for (tid, cls, name, safe, default_enabled) in _DAILY_TASKS
 }
 
 
@@ -98,7 +108,6 @@ class DailyRoutine:
         self._engine = WorkflowEngine(
             _REGISTRY,
             inter_step=self._hub.execute,
-            should_skip=self._should_skip,
             resolve_condition=resolve_condition,
             action_executor=run_custom_action,
         )
@@ -116,17 +125,12 @@ class DailyRoutine:
                     else ""
                 ),
                 "safe": safe,
+                "default_enabled": default_enabled,
             }
-            for task_id, task_cls, display_name, safe in _DAILY_TASKS
+            for task_id, task_cls, display_name, safe, default_enabled in (
+                _DAILY_TASKS
+            )
         ]
-
-    def _should_skip(self, step: PlanStep, ctx: ProcessContext) -> str | None:
-        """Skip the startup task when the game was already running."""
-        if step.task_id == "startup" and not ctx.config.get(
-            "game_was_launched", False
-        ):
-            return "game already running"
-        return None
 
     async def execute(self, ctx: ProcessContext) -> ProcessResult:
         ctx.logger.info("=== DailyRoutine: starting ===")

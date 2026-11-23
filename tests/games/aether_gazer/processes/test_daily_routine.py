@@ -101,10 +101,40 @@ def test_daily_routine_task_defs_match_task_list():
     assert [d["id"] for d in defs] == [entry[0] for entry in _DAILY_TASKS]
 
 
+def test_daily_routine_default_enabled_flags():
+    """联防协议 ships unchecked (default_enabled=False); every other task
+    ships checked. task_defs() must surface the flag for the UI."""
+    by_id = {entry[0]: entry for entry in _DAILY_TASKS}
+    assert by_id["joint_defense"][4] is False
+    for tid, entry in by_id.items():
+        if tid != "joint_defense":
+            assert entry[4] is True, f"{tid} should default-enabled"
+
+    defs = {d["id"]: d for d in DailyRoutine.task_defs()}
+    assert defs["joint_defense"]["default_enabled"] is False
+    assert defs["invitation_reward"]["default_enabled"] is True
+    assert defs["invitation_reward"]["safe"] is True
+
+
+def test_daily_routine_invitation_task_registered():
+    """邀约奖励 is registered with the right id/class."""
+    by_id = {entry[0]: entry for entry in _DAILY_TASKS}
+    entry = by_id["invitation_reward"]
+    assert entry[1].__name__ == "InvitationRewardClaim"
+    assert entry[2] == "邀约奖励"
+
+
 def test_daily_routine_completes_all_tasks():
-    """Happy path: every task succeeds (game freshly launched)."""
+    """Happy path: every task succeeds when explicitly fully enabled.
+
+    Uses the legacy ``enabled_tasks`` whitelist covering all ids — joint_defense
+    ships default-disabled, so the bare default config would skip it.
+    """
     device = MockDevice()
-    ctx = ProcessContext(device=device, config={"game_was_launched": True})
+    ctx = ProcessContext(device=device, config={
+        "game_was_launched": True,
+        "enabled_tasks": [entry[0] for entry in _DAILY_TASKS],
+    })
 
     patches = _patch_all()
     _start_patches(patches)
@@ -125,7 +155,10 @@ def test_daily_routine_reports_failure_when_tasks_fail():
     made the pipeline log "1/1 succeeded" while every task had failed.
     """
     device = MockDevice()
-    ctx = ProcessContext(device=device, config={"game_was_launched": True})
+    ctx = ProcessContext(device=device, config={
+        "game_was_launched": True,
+        "enabled_tasks": [entry[0] for entry in _DAILY_TASKS],
+    })
 
     patches = [
         patch(f"{_MOD}.ReturnToHub.execute", _task_success()),
@@ -147,6 +180,28 @@ def test_daily_routine_reports_failure_when_tasks_fail():
     assert len(result.data["failed"]) == _TASK_COUNT
     # Message must name the failures so the UI/log is actionable.
     assert "failed" in result.message
+
+
+def test_daily_routine_runs_startup_when_game_already_open():
+    """Regression: the startup task must NOT be skipped when the game was
+    already running (game_was_launched=False). An already-open game may still
+    be at the login screen or behind a popup; skipping startup would leave
+    those up and break every downstream task.
+    """
+    device = MockDevice()
+    ctx = ProcessContext(device=device, config={"game_was_launched": False})
+
+    patches = _patch_all()
+    _start_patches(patches)
+    try:
+        result = _run(DailyRoutine().execute(ctx))
+    finally:
+        _stop_patches(patches)
+
+    assert result.status == "success"
+    # startup must have actually run, not been skipped.
+    assert "startup" in _completed_ids(result)
+    assert "startup(skipped)" not in result.data["completed"]
 
 
 def test_daily_routine_skips_if_cannot_run():
@@ -234,8 +289,9 @@ def test_backward_compat_enabled_tasks_set():
     assert len(_completed_ids(result)) == 2
 
 
-def test_safe_task_forced_enabled():
-    """A safe task cannot be disabled via plan — it is forced on."""
+def test_safe_task_respects_disabled():
+    """A safe task disabled via plan is skipped — no force-enable since
+    the orchestrator became fully user-controllable (v0.5.x)."""
     device = MockDevice()
     plan = [
         {"id": tid, "enabled": tid != "mail"}
@@ -251,7 +307,7 @@ def test_safe_task_forced_enabled():
         result = _run(DailyRoutine().execute(ctx))
     finally:
         _stop_patches(patches)
-    assert "mail" in _completed_ids(result)  # safe -> forced enabled
+    assert "mail" not in _completed_ids(result)  # safe -> stays disabled
 
 
 def test_plan_unknown_task_id_dropped():

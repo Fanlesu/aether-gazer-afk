@@ -155,6 +155,7 @@ class TaskManager:
                         name=td.get("name", td["id"]),
                         description=td.get("description", ""),
                         safe=td.get("safe", True),
+                        enabled=td.get("default_enabled", True),
                     ))
 
             self._pipelines.append(PipelineDef(
@@ -362,9 +363,9 @@ class TaskManager:
                     state.description = entry.get(
                         "description", state.description
                     )
+                # Fully user-controllable since v0.5.x: safe tasks are
+                # advisory "基础任务" metadata only and may be disabled.
                 state.enabled = bool(entry.get("enabled", True))
-                if state.safe and not state.enabled:
-                    state.enabled = True
                 state.params = entry.get("params") or {}
                 # L2: condition gate + failure policy (validated by engine)
                 state.condition = entry.get("condition")

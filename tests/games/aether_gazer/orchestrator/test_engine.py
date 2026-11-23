@@ -71,15 +71,17 @@ def test_build_plan_explicit_order_and_unknown_drop():
     assert [s.task_id for s in plan] == ["fight", "mail"]
 
 
-def test_build_plan_safe_forced_enabled():
+def test_build_plan_respects_disabled_safe_task():
+    """Since v0.5.x, safe tasks are fully user-controllable: an explicit
+    plan may disable them and build_plan must honor that (no forcing)."""
     reg = _registry()
     engine = WorkflowEngine(reg)
     plan = engine.build_plan({"plan": [
-        {"id": "mail", "enabled": False},   # safe -> forced on
+        {"id": "mail", "enabled": False},   # safe -> disabled stays disabled
         {"id": "intel", "enabled": False},  # not safe -> stays off
     ]})
     by_id = {s.task_id: s for s in plan}
-    assert by_id["mail"].enabled is True
+    assert by_id["mail"].enabled is False
     assert by_id["intel"].enabled is False
 
 
@@ -100,6 +102,24 @@ def test_build_plan_default_all_enabled():
     plan = engine.build_plan({})
     assert [s.task_id for s in plan] == list(reg.keys())
     assert all(s.enabled for s in plan)
+
+
+def test_build_plan_default_honors_meta_default_enabled():
+    """The no-config default path honors each TaskMeta.default_enabled
+    (e.g. 联防协议 ships unchecked); explicit plans still override."""
+    reg = {
+        "mail": TaskMeta(_make_task("mail"), "邮件", True),
+        "jd": TaskMeta(_make_task("jd"), "联防", False, default_enabled=False),
+    }
+    engine = WorkflowEngine(reg)
+    plan = engine.build_plan({})
+    by_id = {s.task_id: s for s in plan}
+    assert by_id["mail"].enabled is True
+    assert by_id["jd"].enabled is False
+
+    # User choice wins on the explicit-plan path
+    plan = engine.build_plan({"plan": [{"id": "jd", "enabled": True}]})
+    assert plan[0].enabled is True
 
 
 # --- run ---------------------------------------------------------------

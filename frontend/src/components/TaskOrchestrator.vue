@@ -29,11 +29,11 @@
           >▼</button>
         </div>
 
-        <!-- Enable checkbox (safe tasks locked on) -->
+        <!-- Enable checkbox (all tasks freely toggleable) -->
         <div
           class="task-check"
-          :class="{ checked: task.enabled, locked: task.safe }"
-          :title="task.safe ? '安全任务：涉及资源/货币，无法禁用' : '启用 / 禁用'"
+          :class="{ checked: task.enabled }"
+          :title="task.safe ? '基础任务：不消耗游戏资源，可自由开关' : '启用 / 禁用'"
           @click="toggleEnabled(task)"
         ></div>
 
@@ -42,7 +42,7 @@
         <div class="orch-body">
           <div class="orch-name-row">
             <span class="orch-name" :class="{ unsafe: task.safe }">{{ task.name }}</span>
-            <span v-if="task.safe" class="orch-lock">🔒 保护</span>
+            <span v-if="task.safe" class="orch-lock" title="基础任务：不消耗游戏资源">基础</span>
             <span v-if="isCustom(task)" class="orch-custom-badge">自定义</span>
           </div>
 
@@ -319,7 +319,6 @@ function swap(i, j) {
 }
 
 function toggleEnabled(task) {
-  if (task.safe) return  // safe tasks are always on
   task.enabled = !task.enabled
 }
 
@@ -779,11 +778,6 @@ function reset() {
   color: var(--text-on-accent);
   font-size: 11px;
   font-weight: 700;
-}
-
-.task-check.locked {
-  cursor: not-allowed;
-  opacity: 0.8;
 }
 
 /* L3 custom-step editor */

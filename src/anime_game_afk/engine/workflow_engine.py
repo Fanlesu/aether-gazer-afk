@@ -121,11 +121,17 @@ PlanItem = PlanStep | PlanGroup
 
 @dataclass
 class TaskMeta:
-    """Metadata for a registrable task."""
+    """Metadata for a registrable task.
+
+    ``default_enabled`` is the initial checkbox state for fresh configs
+    (UI discovery + the engine's default plan path). It does NOT override
+    a user's saved plan — persisted ``enabled`` values always win.
+    """
 
     cls: type
     name: str
     safe: bool
+    default_enabled: bool = True
 
 
 # Hook signatures (annotations only — not evaluated at runtime).
@@ -189,23 +195,20 @@ class WorkflowEngine:
 
         Priority: explicit ``config["plan"]`` (ordered step list) >
         legacy ``config["enabled_tasks"]`` set (default order) >
-        all registered tasks enabled (default order).
+        registry default (default order, honoring each task's
+        ``default_enabled``).
 
-        Unknown task ids are always dropped. On the explicit-plan path,
-        ``safe`` tasks are forced enabled so a user/bug can never silently
-        disable a task that spends in-game currency or resources. The
-        legacy ``enabled_tasks`` whitelist path is left strict (no forcing)
-        to preserve its exact backward-compatible meaning.
+        Unknown task ids are always dropped. Every task — including the
+        free ``safe=True`` skeleton ones — is fully user-controllable on
+        the explicit-plan path (since v0.5.x the orchestrator UI allows
+        arbitrary enable/disable; ``TaskMeta.safe`` is advisory metadata
+        only, surfaced in the UI as a "基础任务" hint). Unknown or disabled
+        steps are simply skipped at run time. The legacy ``enabled_tasks``
+        whitelist path is unchanged.
         """
         raw = config.get("plan")
         if raw:
             steps = [self._parse_item(e) for e in raw]
-            # safe tasks may not be disabled via an explicit user plan
-            for step in steps:
-                if isinstance(step, PlanStep) and not step.enabled:
-                    meta = self._registry.get(step.task_id)
-                    if meta is not None and meta.safe and not step.enabled:
-                        step.enabled = True
         elif "enabled_tasks" in config:
             enabled = set(config["enabled_tasks"])
             steps = [
@@ -213,7 +216,10 @@ class WorkflowEngine:
                 for tid in self._registry
             ]
         else:
-            steps = [PlanStep(tid) for tid in self._registry]
+            steps = [
+                PlanStep(tid, enabled=self._registry[tid].default_enabled)
+                for tid in self._registry
+            ]
 
         # Drop unknown task ids (defensive — a stale config should not crash)
         return [s for s in steps if self._eligible(s)]
