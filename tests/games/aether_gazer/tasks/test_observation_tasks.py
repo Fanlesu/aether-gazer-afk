@@ -24,6 +24,7 @@ from anime_game_afk.games.aether_gazer.tasks.observation_tasks import (
 class MockDevice:
     click_log: list = field(default_factory=list)
     key_log: list = field(default_factory=list)
+    resolution: tuple = (1600, 900)
 
     def screenshot(self) -> np.ndarray:
         return np.zeros((900, 1600, 3), dtype=np.uint8)
@@ -346,3 +347,68 @@ def test_tactics_fails_fast_when_entry_never_succeeds():
     assert result.status == "failed"
     # The 任务-tab click (0.101, 0.932) must NOT run — we never entered.
     assert (0.101, 0.932) not in device.click_log
+
+
+def test_tactics_claims_weekly_tab_button():
+    """2026-11-23 regression: the 一键领取 button only appears after
+    selecting the 本周任务 sidebar tab — landing view has none, and the
+    old back-click step exited to the hub instead. The flow must click
+    本周任务 (OCR-located) and claim there."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+
+    def _find():
+        async def _eval(self, ctx):
+            target = self._target
+            if target == "本周任务":
+                # OCR-located sidebar tab (screenshot space 1600x900)
+                return CheckResult(
+                    passed=True,
+                    data=type("R", (), {"region": type(
+                        "Reg", (), {"x": 120, "y": 190, "w": 80, "h": 30},
+                    )()})(),
+                )
+            if target == "一键领取":
+                return CheckResult(
+                    passed=True,
+                    data=type("R", (), {"region": type(
+                        "Reg", (), {"x": 1100, "y": 660, "w": 120, "h": 40},
+                    )()})(),
+                )
+            return CheckResult(passed=False)
+        return _eval
+
+    with (
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_FIND_TEXT, _find()),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert result.data["claimed_weekly"] is True
+    # 本周任务 clicked at its OCR-derived center (160,205)@1600x900 → frac
+    assert (0.1, 205 / 900) in device.click_log
+    # 一键领取 clicked at its OCR center (1160,680)@1600x900 → frac, ×3
+    assert (1160 / 1600, 680 / 900) in device.click_log
+
+
+def test_tactics_weekly_tab_ocr_miss_falls_back_to_fixed_coords():
+    """OCR miss on 本周任务 → fixed measured coords (0.102, 0.282) are used
+    instead of the old back-click (which left the tasks page entirely)."""
+    device = MockDevice()
+    ctx = _ctx(device)
+    task = TacticsTaskClaim()
+    with (
+        patch(_ON_PAGE_PATCH, AsyncMock(side_effect=[True])),
+        patch(_FIND_TEXT, AsyncMock(return_value=CheckResult(passed=False))),
+        patch(_RETURN_RUN, AsyncMock()),
+    ):
+        result = _run(task.execute(ctx))
+
+    assert result.status == "success"
+    assert result.data["claimed_weekly"] is False
+    assert (0.102, 0.282) in device.click_log
+    # The old buggy behaviour clicked back (0.022, 0.039) here — must not.
+    assert (0.022, 0.039) not in device.click_log

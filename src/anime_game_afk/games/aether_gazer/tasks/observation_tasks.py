@@ -282,7 +282,13 @@ class DailyWeeklyMissionClaim:
 class TacticsTaskClaim:
     """Claim 对策协议 (Tactics Protocol) task rewards.
 
-    Flow: hub → T(对策协议) → 任务(162,839) → 一键领取(1480,860) ×3 → return to hub
+    Flow: hub → T(对策协议) → 任务 tab
+          → [今日视图] 一键领取? ×3 → 本周任务 tab → 一键领取? ×3 → return to hub
+
+    Note: the 一键领取 button only appears after selecting the 本周任务
+    sidebar tab (2026-11-23 user-confirmed); the landing view has none.
+    Each claim attempt is OCR-verified and skipped silently when absent
+    (all claimed already).
 
     Identification methods:
     - Keyboard: T shortcut opens tactics protocol
@@ -298,6 +304,10 @@ class TacticsTaskClaim:
 
     _TACTICS_TASK_X, _TACTICS_TASK_Y = 0.101, 0.932
     _TACTICS_CLAIM_X, _TACTICS_CLAIM_Y = 0.925, 0.956
+    # 任务页左侧栏「本周任务」tab — 一键领取按钮只在选中本周任务后出现
+    # (2026-11-23 用户截图实测：landing 今日任务视图无该按钮)。
+    # OCR 定位优先，此坐标仅作 OCR miss 时的回退。
+    _WEEKLY_TAB_X, _WEEKLY_TAB_Y = 0.102, 0.282
     # Red dot on the 对策协议 hub icon (coord-picker 实测 @hub). Gate the
     # whole task on it: no red dot ⇒ no pending rewards ⇒ skip.
     _TACTICS_RED_DOT = RED_DOTS["tactics"]
@@ -397,47 +407,32 @@ class TacticsTaskClaim:
         if run_log:
             run_log.snap(ctx.device, "tactics_tasks")
 
-        # Step 3: OCR "一键领取" → if found, click ×3
+        # Step 3: OCR "一键领取" on the landing (今日任务) view → click ×3
         ctx.logger.info("[Step 3] Check for '一键领取' on 对策协议 page")
-        claim_result = await FindTextCheck(target="一键领取").evaluate(ctx)
-        if claim_result.passed:
-            btn = claim_result.data
-            cx = btn.region.x + btn.region.w // 2
-            cy = btn.region.y + btn.region.h // 2
-            ctx.logger.info(
-                f"  [Step 3] Found '一键领取' at ({cx},{cy}) — clicking ×3"
-            )
-            for _ in range(3):
-                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
-        else:
-            ctx.logger.info("  [Step 3] '一键领取' not found — skipped")
+        claimed_landing = await self._claim_visible(ctx, "Step 3")
         if run_log:
             run_log.snap(ctx.device, "tactics_after_claim")
 
-        # Step 4: Click 返回, then OCR "一键领取" again
-        ctx.logger.info("[Step 4] Click 返回 → check for '一键领取' again")
-        back_result = await FindTextCheck(target="返回").evaluate(ctx)
-        if back_result.passed:
-            btn = back_result.data
-            bx = btn.region.x + btn.region.w // 2
-            by = btn.region.y + btn.region.h // 2
-            await ClickPxOp(px=bx, py=by, wait=1.0).run(ctx)
+        # Step 4: 本周任务 tab — 一键领取 only appears after selecting the
+        # weekly tab (2026-11-23 run log: landing view had no button, and
+        # the old "click 返回 + re-check" step actually exited to the hub).
+        ctx.logger.info("[Step 4] Click 本周任务 tab → check for '一键领取'")
+        tab = await FindTextCheck(target="本周任务").evaluate(ctx)
+        if tab.passed:
+            btn = tab.data
+            tx = btn.region.x + btn.region.w // 2
+            ty = btn.region.y + btn.region.h // 2
+            ctx.logger.info(f"  [Step 4] Clicking 本周任务 at ({tx},{ty})")
+            await ClickPxOp(px=tx, py=ty, wait=1.5).run(ctx)
         else:
-            await ClickOp(x=0.022, y=0.039, wait=1.0).run(ctx)
-
-        ctx.logger.info("  checking for secondary '一键领取'")
-        claim2 = await FindTextCheck(target="一键领取").evaluate(ctx)
-        if claim2.passed:
-            btn = claim2.data
-            cx = btn.region.x + btn.region.w // 2
-            cy = btn.region.y + btn.region.h // 2
             ctx.logger.info(
-                f"  [Step 4] Found secondary '一键领取' at ({cx},{cy}) — clicking ×3"
+                "  [Step 4] '本周任务' OCR miss — clicking fixed "
+                f"({self._WEEKLY_TAB_X},{self._WEEKLY_TAB_Y})"
             )
-            for _ in range(3):
-                await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
-        else:
-            ctx.logger.info("  [Step 4] Secondary '一键领取' not found — skipped")
+            await ClickOp(
+                x=self._WEEKLY_TAB_X, y=self._WEEKLY_TAB_Y, wait=1.5,
+            ).run(ctx)
+        claimed_weekly = await self._claim_visible(ctx, "Step 4")
         if run_log:
             run_log.snap(ctx.device, "tactics_after_secondary_claim")
 
@@ -448,4 +443,25 @@ class TacticsTaskClaim:
             run_log.snap(ctx.device, "tactics_done")
 
         ctx.logger.info("=== TacticsTaskClaim: complete ===")
-        return TaskResult(status="success", data={"task": "tactics_claim"})
+        return TaskResult(
+            status="success",
+            data={
+                "task": "tactics_claim",
+                "claimed_landing": claimed_landing,
+                "claimed_weekly": claimed_weekly,
+            },
+        )
+
+    async def _claim_visible(self, ctx: TaskContext, step: str) -> bool:
+        """OCR '一键领取' → click ×3 if present. Returns whether found."""
+        claim = await FindTextCheck(target="一键领取").evaluate(ctx)
+        if not claim.passed:
+            ctx.logger.info(f"  [{step}] '一键领取' not found — skipped")
+            return False
+        btn = claim.data
+        cx = btn.region.x + btn.region.w // 2
+        cy = btn.region.y + btn.region.h // 2
+        ctx.logger.info(f"  [{step}] Found '一键领取' at ({cx},{cy}) — clicking ×3")
+        for _ in range(3):
+            await ClickPxOp(px=cx, py=cy, wait=0.5).run(ctx)
+        return True
